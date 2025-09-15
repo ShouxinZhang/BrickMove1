@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SFS4 Review — Formal vs Main Theorem</title>
+  <link rel="stylesheet" href="styles.css?v=8" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/highlight.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.49.0/min/vs/loader.js"></script>
+  <script>
+  // Minimal Lean 4 grammar for highlight.js (keywords, comments, strings) for the left readonly panel
+  (function(){
+    function hljsLean(hljs) {
+      const KEYWORDS = {
+        keyword:
+          'theorem lemma def defn axiom abbrev structure class instance where ' +
+          'open scoped namespace end variable variables section by intro intros ' +
+          'exact apply refine match with fun if then else do let in macro macro_rules ' +
+          'deriving mutual termination decreasing_by have from calc simp dsimp rw rfl sorry',
+        literal: 'True False Prop Type Sort Nat Int Rat Real Bool',
+        built_in:
+          'List Option Some None And Or Not Eq HEq Subtype Sigma Sum Prod PUnit PEmpty Unit Empty ' +
+          'Decidable DecidableEq'
+      };
+      return {
+        name: 'Lean',
+        aliases: ['lean'],
+        keywords: KEYWORDS,
+        lexemes: /[A-Za-z_α-ωΑ-Ω][\w_ʼ′’₀-₉]*/,
+        contains: [
+          hljs.C_LINE_COMMENT_MODE, // -- comment
+          { // block comment /- -/
+            className: 'comment',
+            begin: '/-', end: '-/',
+            contains: ['self']
+          },
+          hljs.QUOTE_STRING_MODE,
+          { className: 'number', begin: /\b\d+(\.\d+)?\b/ },
+          { className: 'punctuation', begin: /[()\[\]{}.,:;]/, relevance: 0 }
+        ]
+      };
+    }
+    if (window.hljs) {
+      try { hljs.registerLanguage('lean', hljsLean); } catch (e) { console.warn('Lean HLJS registration failed', e); }
+    } else { console.warn('hljs not found when registering lean'); }
+  })();
+  </script>
+</head>
+<body>
+  <header>
+    <h1>SFS4 Review — Formal vs Main Theorem</h1>
+    <div class="controls">
+      <button id="loadBtn" title="Load JSON">Load JSON…</button>
+      <input id="fileInput" type="file" accept="application/json,.json" style="display:none" />
+      <button id="prevBtn" title="Previous">⟵ Prev</button>
+      <span id="pos"></span>
+      <input id="jumpInput" type="number" min="1" step="1" placeholder="#" title="Jump to index (1-based)" class="jump-input" />
+      <button id="jumpBtn" title="Go to index">Go</button>
+      <button id="nextBtn" title="Next">Next ⟶</button>
+      <span id="lspStatus" class="badge" title="Lean LSP connection status">LSP: —</span>
+      <label style="margin-left:1rem;color:#cbd5e1">Split
+        <input id="splitRange" type="range" min="20" max="80" value="50" step="1" title="Adjust left/right split" />
+      </label>
+      <label style="margin-left:1rem;color:#cbd5e1">Width
+        <input id="mainWidthInput" type="number" min="900" max="2400" step="50" value="1400" title="Set main content width (px)" class="jump-input" style="width:7rem" /> px
+      </label>
+    </div>
+  </header>
+
+  <main>
+    <section class="meta">
+      <div><strong>ID:</strong> <span id="itemId">—</span></div>
+      <div><strong>Title:</strong> <span id="itemTitle">—</span></div>
+    </section>
+    <section class="columns">
+      <div class="column">
+        <h2>Formal Proof</h2>
+        <div id="formalViewer" class="monaco-host readonly"></div>
+      </div>
+      <div class="column">
+        <h2>Main Theorem Statement</h2>
+        <div class="editor-wrap">
+          <div id="mainEditor" class="monaco-host"></div>
+        </div>
+        <div class="compile">
+          <button id="compileBtn">Compile</button>
+          <label class="auto">
+            <input type="checkbox" id="autoCompile" /> Auto-compile
+          </label>
+          <button id="toggleInfoview" title="Show/Hide info view">Toggle Infoview</button>
+          <button id="editInVSCode" title="Open temp file in VS Code and sync back">Modify in VSCode</button>
+          <span id="compileStatus"></span>
+        </div>
+        <details class="logs" id="infoview" open>
+          <summary>Compiler Output + InfoView</summary>
+          <div class="split-logs">
+            <div>
+              <h3>Stdout</h3>
+              <pre id="compileStdout" class="code small"></pre>
+            </div>
+            <div>
+              <h3>Stderr</h3>
+              <pre id="compileStderr" class="code small"></pre>
+            </div>
+          </div>
+          <hr />
+          <div class="infoview-grid">
+            <section class="infosec">
+              <details open>
+                <summary>Expected type</summary>
+                <pre id="expectedType" class="code small"></pre>
+              </details>
+            </section>
+            <section class="infosec">
+              <details open>
+                <summary>Goals</summary>
+                <pre id="goalView" class="code small"></pre>
+              </details>
+            </section>
+            <section class="infosec">
+              <details>
+                <summary>Term goal</summary>
+                <pre id="termGoalView" class="code small"></pre>
+              </details>
+            </section>
+            <section class="infosec">
+              <details open>
+                <summary>All Messages</summary>
+                <ul id="messagesList" class="msgs"></ul>
+              </details>
+            </section>
+          </div>
+        </details>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="controls">
+      <button id="prevBtnBottom" title="Previous">⟵ Prev</button>
+      <span id="posBottom"></span>
+      <input id="jumpInputBottom" type="number" min="1" step="1" placeholder="#" title="Jump to index (1-based)" class="jump-input" />
+      <button id="jumpBtnBottom" title="Go to index">Go</button>
+      <button id="nextBtnBottom" title="Next">Next ⟶</button>
+    </div>
+  </footer>
+
+  <script type="module" src="app.js?v=8"></script>
+</body>
+</html>
