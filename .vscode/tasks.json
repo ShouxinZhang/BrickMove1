@@ -10,6 +10,22 @@
 			"group": "build"
 		},
 		{
+			"label": "Lean→JSON: fresh export",
+			"type": "shell",
+			"command": "python3 JsonExport/export_from_lean_dir.py --indir sfs4_new_blocks --output sfs4_from_lean.json --overwrite",
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Lean→JSON: backfill template",
+			"type": "shell",
+			"command": "python3 JsonExport/export_from_lean_dir.py --indir sfs4_new_blocks --template sfs4_reshape_with_main.json --output sfs4_reshape_with_main.updated.json --start 1 --overwrite",
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
 			"label": "Start model config server (venv)",
 			"type": "shell",
 			"command": ". .venv/bin/activate && python StatementChange/model_config_server.py",

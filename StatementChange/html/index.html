@@ -30,7 +30,17 @@
       </div>
 
       <div class="run-status">
+        <div class="row">
+          <button type="button" id="btn-start-process">开始处理</button>
+          <button type="button" id="btn-start-build" class="ghost">开始 Build 输出文件</button>
+        </div>
         <p id="run-msg"></p>
+        <div class="progress" id="process-progress" hidden>
+          <div class="bar" id="process-bar" style="width:0%"></div>
+        </div>
+        <div class="progress" id="build-progress" hidden>
+          <div class="bar" id="build-bar" style="width:0%"></div>
+        </div>
         <pre id="run-log" class="log"></pre>
       </div>
     </section>

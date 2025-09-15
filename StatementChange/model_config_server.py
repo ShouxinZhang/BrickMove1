@@ -12,14 +12,100 @@ from typing import List
 import cgi
 from urllib.parse import urlparse
 import sys
+import threading
+from typing import Optional, Dict, Any
 
 BASE = Path(__file__).parent
 PUBLIC = BASE / 'html'
 CFG = BASE / 'model_config.json'
 ROOT = BASE.parent
 UPLOADS = BASE / 'uploads'
-DOWNLOADS = BASE / 'download'
+DOWNLOADS = BASE / 'downloads'
 UPLOADS.mkdir(parents=True, exist_ok=True)
+
+# Ensure we can import modules from repo root (e.g., LeanCheck)
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+# Global state for last output dir and build progress
+LAST_OUTPUT_DIR: Optional[Path] = None
+_build_lock = threading.Lock()
+BUILD_STATUS: Dict[str, Any] = {
+    'state': 'idle',  # idle | running | done | error
+    'total': 0,
+    'completed': 0,
+    'successes': 0,
+    'failures': [],
+    'logs': [],
+    'summary': None,
+}
+_build_thread: Optional[threading.Thread] = None
+
+def _reset_build_status():
+    with _build_lock:
+        BUILD_STATUS.update({
+            'state': 'idle',
+            'total': 0,
+            'completed': 0,
+            'successes': 0,
+            'failures': [],
+            'logs': [],
+            'summary': None,
+        })
+
+def _append_log(msg: str):
+    with _build_lock:
+        logs = BUILD_STATUS.get('logs', [])
+        logs.append(msg)
+        # cap logs to last 500 lines
+        if len(logs) > 500:
+            del logs[:len(logs)-500]
+        BUILD_STATUS['logs'] = logs
+
+def _start_build(blocks_dir: Path, workers: int = 100):
+    from LeanCheck.parallel_build_checker import run_parallel_build_check
+
+    def progress_cb(evt: Dict[str, Any]):
+        typ = evt.get('phase')
+        if typ == 'init':
+            with _build_lock:
+                BUILD_STATUS['state'] = 'running'
+                BUILD_STATUS['total'] = int(evt.get('total', 0))
+                BUILD_STATUS['completed'] = 0
+                BUILD_STATUS['successes'] = 0
+                BUILD_STATUS['failures'] = []
+            _append_log(f"Start building {BUILD_STATUS['total']} files with {workers} workers")
+        elif typ == 'file':
+            block_id = evt.get('block_id', '')
+            success = bool(evt.get('success', False))
+            with _build_lock:
+                BUILD_STATUS['completed'] += 1
+                if success:
+                    BUILD_STATUS['successes'] += 1
+                else:
+                    fails = BUILD_STATUS.get('failures', [])
+                    fails.append(block_id)
+                    BUILD_STATUS['failures'] = fails
+            _append_log(("✓ " if success else "✗ ") + str(block_id))
+        elif typ == 'done':
+            with _build_lock:
+                BUILD_STATUS['state'] = 'done'
+                BUILD_STATUS['summary'] = evt.get('summary')
+            _append_log('Build finished')
+
+    def worker():
+        try:
+            _reset_build_status()
+            # Execute build check
+            run_parallel_build_check(str(blocks_dir), str(ROOT / 'build_check_logs'), None, workers, progress_cb=progress_cb)
+        except Exception as e:
+            with _build_lock:
+                BUILD_STATUS['state'] = 'error'
+            _append_log(f'Build error: {e}')
+
+    global _build_thread
+    _build_thread = threading.Thread(target=worker, daemon=True)
+    _build_thread.start()
 
 BLOCK_COMMENT_RE = re.compile(r"/-[\s\S]*?-/", re.MULTILINE)
 LINE_COMMENT_RE = re.compile(r"(^|\s)--.*?$", re.MULTILINE)
@@ -79,6 +165,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             else:
                 data={}
             self.wfile.write(json.dumps(data).encode('utf-8'))
+            return
+        if self.path.startswith('/build-status'):
+            with _build_lock:
+                payload = dict(BUILD_STATUS)
+            self.send_response(200)
+            self.send_header('Content-Type','application/json; charset=utf-8')
+            self.end_headers()
+            self.wfile.write(json.dumps(payload, ensure_ascii=False).encode('utf-8'))
             return
         return super().do_GET()
 
@@ -174,6 +268,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     (out_dir / p.name).write_text(new_code, encoding='utf-8')
                 logs.append(f'本地处理完成，共 {len(saved)} 个文件')
 
+            # remember last output dir for downstream build
+            global LAST_OUTPUT_DIR
+            LAST_OUTPUT_DIR = out_dir
+
             self.send_response(200)
             self.send_header('Content-Type','application/json; charset=utf-8')
             self.end_headers()
@@ -219,6 +317,37 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_header('Content-Type','application/json; charset=utf-8')
             self.end_headers()
             self.wfile.write(b'{"ok":true}')
+            return
+        if self.path.startswith('/build-start'):
+            l=int(self.headers.get('Content-Length','0'))
+            raw=self.rfile.read(l) if l>0 else b'{}'
+            try:
+                data=json.loads(raw.decode('utf-8')) if raw else {}
+            except Exception:
+                data={}
+            workers = int(data.get('workers', 100) or 100)
+            dir_arg = data.get('dir') or data.get('blocks_dir')
+            blocks_dir = None
+            if dir_arg:
+                blocks_dir = Path(dir_arg)
+            else:
+                blocks_dir = LAST_OUTPUT_DIR
+            if not blocks_dir or not Path(blocks_dir).exists():
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(json.dumps({'ok': False, 'error': 'blocks_dir 不存在'}).encode('utf-8'))
+                return
+            with _build_lock:
+                if BUILD_STATUS.get('state') == 'running':
+                    self.send_response(409)
+                    self.end_headers()
+                    self.wfile.write(json.dumps({'ok': False, 'error': '已有构建在运行'}).encode('utf-8'))
+                    return
+            _start_build(Path(blocks_dir), workers=workers)
+            self.send_response(200)
+            self.send_header('Content-Type','application/json; charset=utf-8')
+            self.end_headers()
+            self.wfile.write(json.dumps({'ok': True}).encode('utf-8'))
             return
         return super().do_POST()
 

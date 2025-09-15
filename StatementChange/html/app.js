@@ -51,6 +51,12 @@ const fileInput = document.getElementById('file-input');
 const pickBtn = document.getElementById('pick-files');
 const runMsg = document.getElementById('run-msg');
 const runLog = document.getElementById('run-log');
+const btnStartProcess = document.getElementById('btn-start-process');
+const btnStartBuild = document.getElementById('btn-start-build');
+const processProgress = document.getElementById('process-progress');
+const processBar = document.getElementById('process-bar');
+const buildProgress = document.getElementById('build-progress');
+const buildBar = document.getElementById('build-bar');
 
 function setRunMsg(t, cls){
   runMsg.textContent = t || '';
@@ -68,6 +74,28 @@ function getMode(){
 }
 
 pickBtn.addEventListener('click', ()=> fileInput.click());
+btnStartProcess.addEventListener('click', async ()=>{
+  if(fileInput.files && fileInput.files.length>0){
+    await handleFiles(fileInput.files);
+    fileInput.value = '';
+  }else{
+    setRunMsg('请先选择或拖入 .lean 文件', 'error');
+  }
+});
+
+btnStartBuild.addEventListener('click', async ()=>{
+  try{
+    const r = await fetch('/build-start', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({workers:100})});
+    const res = await r.json().catch(()=>({}));
+    if(!r.ok){
+      throw new Error((res && res.error) || `启动失败 (${r.status})`);
+    }
+    setRunMsg('已开始 Build（并发 100）', 'success');
+    startBuildPolling();
+  }catch(e){
+    setRunMsg(`启动 Build 失败：${e.message}`, 'error');
+  }
+});
 fileInput.addEventListener('change', async (e)=>{
   if(e.target.files && e.target.files.length>0){
     await handleFiles(e.target.files);
@@ -107,6 +135,7 @@ async function handleFiles(fileList){
   if(leanFiles.length===0){ setRunMsg('未检测到 .lean 文件', 'error'); return; }
   setRunMsg(`准备处理 ${leanFiles.length} 个文件（模式：${mode}）...`);
   appendLog(`接收 ${leanFiles.length} 个 .lean 文件`);
+  processProgress.hidden = false; processBar.style.width = '10%';
   try{
     const form = new FormData();
     for(const f of leanFiles){ form.append('files', f, f.webkitRelativePath || f.name); }
@@ -124,6 +153,10 @@ async function handleFiles(fileList){
       setRunMsg(`处理完成，输出目录：${res.outputDir}`, 'success');
       appendLog(`输出目录：${res.outputDir}`);
       if(Array.isArray(res.logs)) res.logs.forEach(l=>appendLog(l));
+      processBar.style.width = '100%';
+      // auto trigger build after processing
+      appendLog('自动开始 Build（并发 100）...');
+      await startBuild();
     }else{
       setRunMsg('处理完成，但未返回输出目录', 'error');
     }
@@ -132,6 +165,7 @@ async function handleFiles(fileList){
     setRunMsg(`处理失败：${err.message}`, 'error');
     appendLog(`错误：${err.stack||err}`);
   }
+    setTimeout(()=>{ processProgress.hidden = true; processBar.style.width = '0%'; }, 1200);
 }
 
 async function readDataTransferItems(items){
@@ -173,4 +207,53 @@ function traverseEntry(entry){
       resolve([]);
     }
   });
+}
+
+async function startBuild(){
+  try{
+    const r = await fetch('/build-start', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({workers:100})});
+    const res = await r.json().catch(()=>({}));
+    if(!r.ok){ throw new Error((res && res.error) || `启动失败 (${r.status})`); }
+    setRunMsg('已开始 Build（并发 100）', 'success');
+    startBuildPolling();
+  }catch(e){
+    setRunMsg(`启动 Build 失败：${e.message}`, 'error');
+  }
+}
+
+function startBuildPolling(){
+  buildProgress.hidden = false; buildBar.style.width = '0%';
+  let lastLogCount = 0;
+  const timer = setInterval(async ()=>{
+    try{
+      const r = await fetch('/build-status');
+      if(!r.ok) throw new Error('状态查询失败');
+      const s = await r.json();
+      const total = s.total || 0; const completed = s.completed || 0;
+      const pct = total? Math.round(completed*100/total) : (s.state==='running'?5:100);
+      buildBar.style.width = pct + '%';
+      if(Array.isArray(s.logs)){
+        const logs = s.logs;
+        if(logs.length > lastLogCount){
+          logs.slice(lastLogCount).forEach(l => appendLog(l));
+          lastLogCount = logs.length;
+        }
+      }
+      if(s.state==='done' || s.state==='error'){
+        clearInterval(timer);
+        if(s.state==='done') setRunMsg('Build 完成', 'success'); else setRunMsg('Build 出错', 'error');
+        if(s.summary){ 
+          appendLog(`成功: ${s.summary.successful_builds}, 失败: ${s.summary.failed_builds}`);
+          if(Array.isArray(s.summary.failed_blocks) && s.summary.failed_blocks.length){
+            appendLog(`失败文件: ${s.summary.failed_blocks.join(', ')}`);
+          }
+        }
+        setTimeout(()=>{ buildProgress.hidden = true; buildBar.style.width='0%'; }, 1500);
+      }
+    }catch(e){
+      // stop polling on error
+      clearInterval(timer);
+      setRunMsg('Build 状态查询失败', 'error');
+    }
+  }, 1000);
 }

@@ -20,6 +20,35 @@ def log_message(message):
     with log_lock:
         print(f"[{timestamp}] {message}")
 
+def find_project_root(start_path: Path) -> Path:
+    """Find Lake project root by searching for lakefile.lean or lake-manifest.json upwards."""
+    p = start_path.resolve()
+    for parent in [p] + list(p.parents):
+        if (parent / 'lakefile.lean').exists() or (parent / 'lake-manifest.json').exists():
+            return parent
+    # fallback: the directory two levels up or cwd
+    try:
+        return p.parents[2]
+    except Exception:
+        return Path.cwd()
+
+def prepare_project(project_root: Path):
+    """Ensure Lake project dependencies are ready (mathlib fetched+built)."""
+    log_message(f"Preparing project at {project_root} (cache get + build)")
+    # Fetch prebuilt cache if available
+    try:
+        subprocess.run(["lake", "exe", "cache", "get"], cwd=str(project_root), check=False, capture_output=True, text=True)
+    except Exception as e:
+        log_message(f"Warning: lake exe cache get failed: {e}")
+    # Build project to ensure Mathlib is available
+    try:
+        r = subprocess.run(["lake", "build"], cwd=str(project_root), check=False, capture_output=True, text=True)
+        if r.returncode != 0:
+            log_message("lake build failed; Lean files may fail due to missing deps")
+            log_message(r.stderr.strip()[:2000])
+    except Exception as e:
+        log_message(f"Warning: lake build failed: {e}")
+
 def build_lean_file(file_path, output_dir):
     """
     Build a single Lean file using lake env lean --make
@@ -31,11 +60,16 @@ def build_lean_file(file_path, output_dir):
         # Use lake env to ensure proper environment setup
         # Lean 4.16 does not support `--make`.
         # Use `--root=.` to set the package root and elaborate the file.
-        project_root = file_path.parent.parent
+        project_root = find_project_root(file_path)
+        try:
+            rel_path = file_path.relative_to(project_root)
+            target_path = str(rel_path)
+        except Exception:
+            target_path = str(file_path)
         cmd = [
             "lake", "env", "lean",
             f"--root={str(project_root)}",
-            str(file_path)
+            target_path
         ]
         
         log_message(f"Building {block_id}...")
@@ -45,7 +79,7 @@ def build_lean_file(file_path, output_dir):
             capture_output=True,
             text=True,
             timeout=60,  # 60 second timeout per file
-            cwd=str(project_root)  # brickMove directory
+            cwd=str(project_root)  # Lake project root directory
         )
         
         success = result.returncode == 0
@@ -73,7 +107,7 @@ def build_lean_file(file_path, output_dir):
         log_message(f"✗ {block_id} (ERROR: {str(e)})")
         return block_id, False, "", f"Build error: {str(e)}", ""
 
-def run_parallel_build_check(blocks_dir, output_dir, block_range=None, max_workers=4):
+def run_parallel_build_check(blocks_dir, output_dir, block_range=None, max_workers=4, progress_cb=None):
     """
     Run parallel build check on Lean files
     
@@ -86,6 +120,8 @@ def run_parallel_build_check(blocks_dir, output_dir, block_range=None, max_worke
     blocks_path = Path(blocks_dir)
     output_path = Path(output_dir)
     output_path.mkdir(exist_ok=True)
+    project_root = find_project_root(blocks_path)
+    prepare_project(project_root)
     
     # Find all Block_*.lean files
     lean_files = list(blocks_path.glob("Block_*.lean"))
@@ -100,9 +136,15 @@ def run_parallel_build_check(blocks_dir, output_dir, block_range=None, max_worke
     
     lean_files.sort()
     
-    log_message(f"Found {len(lean_files)} Lean files to check")
+    total_files = len(lean_files)
+    log_message(f"Found {total_files} Lean files to check")
     log_message(f"Using {max_workers} parallel workers")
     log_message(f"Logs will be saved to: {output_path}")
+    if progress_cb:
+        try:
+            progress_cb({"phase": "init", "total": total_files})
+        except Exception:
+            pass
     
     # Results tracking
     results = []
@@ -136,6 +178,16 @@ def run_parallel_build_check(blocks_dir, output_dir, block_range=None, max_worke
                 successful_builds.append(block_id)
             else:
                 failed_builds.append(block_id)
+            if progress_cb:
+                try:
+                    progress_cb({
+                        "phase": "file",
+                        "block_id": block_id,
+                        "success": success,
+                        "log_file": log_file,
+                    })
+                except Exception:
+                    pass
     
     # Generate summary report
     summary = {
@@ -169,6 +221,11 @@ def run_parallel_build_check(blocks_dir, output_dir, block_range=None, max_worke
     log_message(f"\nDetailed results saved to: {summary_file}")
     log_message(f"Individual logs saved to: {output_path}")
     
+    if progress_cb:
+        try:
+            progress_cb({"phase": "done", "summary": summary})
+        except Exception:
+            pass
     return summary
 
 def main():

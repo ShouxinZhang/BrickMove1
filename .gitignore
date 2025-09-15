@@ -1,6 +1,6 @@
 # Ignore local LLM uploads/downloads
 StatementChange/uploads/
-StatementChange/download/
+StatementChange/downloads/
 sfs4_new_blocks
 build_check_logs
 
