@@ -1,0 +1,23 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Export main theorem statements",
+			"type": "shell",
+			"command": "python3 JsonExport/export_main_statements.py --input sfs4_reshape_with_main.json --outdir sfs4_new_blocks --overwrite",
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Start model config server (venv)",
+			"type": "shell",
+			"command": ". .venv/bin/activate && python StatementChange/model_config_server.py",
+			"isBackground": true,
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"problemMatcher": []
+		}
+	]
+}

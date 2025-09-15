@@ -1,0 +1,16 @@
+# Ignore local LLM uploads/downloads
+StatementChange/uploads/
+StatementChange/download/
+sfs4_new_blocks
+build_check_logs
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Local secrets
+.openrouter_key
+
+# Local configs
+StatementChange/model_config.json

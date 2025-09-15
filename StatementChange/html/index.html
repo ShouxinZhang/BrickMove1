@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Lean 文件处理与 LLM 配置</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="container">
+    <h1>Lean 文件处理面板</h1>
+
+    <section class="run-section">
+      <div class="row">
+        <label class="inline">处理方式
+          <span class="radio-group">
+            <label class="inline"><input type="radio" name="mode" value="local" checked /> 本地处理</label>
+            <label class="inline"><input type="radio" name="mode" value="llm" /> LLM 处理</label>
+          </span>
+        </label>
+      </div>
+
+      <div id="dropzone" class="dropzone" tabindex="0" aria-label="拖拽 Lean 文件或文件夹到此">
+        <div class="dz-inner">
+          <strong>拖拽 .lean 文件或文件夹 到此</strong>
+          <span>也可点击选择（支持多选与文件夹）</span>
+          <button type="button" id="pick-files" class="ghost">选择文件/文件夹</button>
+          <input type="file" id="file-input" multiple webkitdirectory directory accept=".lean" hidden />
+        </div>
+      </div>
+
+      <div class="run-status">
+        <p id="run-msg"></p>
+        <pre id="run-log" class="log"></pre>
+      </div>
+    </section>
+
+    <details class="config-panel" id="config-panel">
+      <summary>LLM 模型配置（点击展开/折叠）</summary>
+      <form id="config-form">
+        <label>模型 ID
+          <input type="text" id="model" placeholder="x-ai/grok-code-fast-1" />
+        </label>
+        <div class="row">
+          <label>temperature
+            <input type="number" step="0.01" id="temperature" placeholder="0.0" />
+          </label>
+          <label>top_p
+            <input type="number" step="0.01" id="top_p" placeholder="1.0" />
+          </label>
+        </div>
+        <div class="row">
+          <label>max_concurrency
+            <input type="number" step="1" id="max_concurrency" placeholder="8" />
+          </label>
+          <label>max_input_chars
+            <input type="number" step="1" id="max_input_chars" placeholder="0" />
+          </label>
+          <label>max_tokens
+            <input type="number" step="1" id="max_tokens" placeholder="0" />
+          </label>
+        </div>
+        <label>系统提示（system_prompt）
+          <textarea id="system_prompt" rows="6" placeholder="留空则使用脚本内置中文系统提示"></textarea>
+        </label>
+        <label>历史对话（history，JSON 数组，元素含 role/content）
+          <textarea id="history" rows="8" placeholder='例如：[{"role":"user","content":"你是谁?"}]'></textarea>
+        </label>
+        <div class="row">
+          <button type="button" id="btn-load">读取配置</button>
+          <button type="submit" id="btn-save">保存配置</button>
+        </div>
+        <p id="msg"></p>
+      </form>
+    </details>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

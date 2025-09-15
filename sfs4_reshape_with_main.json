@@ -4,7 +4,7 @@
     "question_id": 8987,
     "task_id": 6195,
     "formalProof": "import Mathlib\n/--\nThe ring of polynomials $\\mathbb{Q}[X]$ with rational coefficients is a Noetherian ring.\nThis follows from Hilbert's Basis Theorem, given that $\\mathbb{Q}$ (as a field) is Noetherian.\n-/\ntheorem Q_X_is_Noetherian : IsNoetherianRing (Polynomial ℚ) := by\n  apply Polynomial.isNoetherianRing",
-    "main theorem statement": "import Mathlib\n\n/--\nThe ring of polynomials $\\mathbb{Q}[X]$ with rational coefficients is a Noetherian ring.\nThis follows from Hilbert's Basis Theorem, given that $\\mathbb{Q}$ (as a field) is Noetherian.\n-/\ntheorem Q_X_is_Noetherian : IsNoetherianRing (Polynomial ℚ) := by\n  sorry\n"
+    "main theorem statement": "import Mathlib\n\n/--\nThe ring of polynomials $\\mathbb{Q}[X]$ with rational coefficients is a Noetherian ring.\nThis follows from Hilbert's Basis Theorem, given that $\\mathbb{Q}$ (as a field) is Noetherian.\n-/\ntheorem Q_X_is_Noetherian : IsNoetherianRing (Polynomial ℚ) := by\n  -- test\n  sorry\n"
   },
   {
     "id": 8365,
