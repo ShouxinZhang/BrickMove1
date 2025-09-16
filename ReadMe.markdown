@@ -1,2 +1,3 @@
+It' a brick AI for the lean json date reshape.
 1. lake exe cache get + lake build
 2. Waiting...
