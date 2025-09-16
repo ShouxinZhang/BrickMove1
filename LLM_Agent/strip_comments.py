@@ -73,14 +73,33 @@ def strip_lean_comments(text: str, preserve_lines: bool = False) -> str:
             continue
 
         # Detect string or char literal start
-        if ch in ('"', "'"):
+        if ch == '"':
             in_string = True
             string_delim = ch
             put(ch)
             i += 1
             continue
+        if ch == "'":
+            # Heuristic: treat as char literal only if there's a closing '\''
+            # before a newline on the same line (e.g., '\'a\'' or '\'\\n\'').
+            # Avoid entering char-literal mode for identifier suffix primes (e.g., mul_mem').
+            j = i + 1
+            found_close_same_line = False
+            while j < n and text[j] != "\n":
+                if text[j] == "'":
+                    found_close_same_line = True
+                    break
+                # allow escapes and any single char; we only care about same-line close
+                j += 1
+            if found_close_same_line:
+                in_string = True
+                string_delim = ch
+                put(ch)
+                i += 1
+                continue
+            # Otherwise, it's likely an identifier prime; treat as normal char
 
-        # Detect start of block comment '/-' or doc '/--'
+    # Detect start of block comment '/-' or doc '/--'
         if ch == "/" and i + 1 < n and text[i + 1] == "-":
             block_level = 1
             # consume '/-'
@@ -105,6 +124,46 @@ def strip_lean_comments(text: str, preserve_lines: bool = False) -> str:
     return "".join(out_chars)
 
 
+def _adjust_blank_lines(text: str, remove: bool = False, compact: int | None = None) -> str:
+    """
+    Post-process blank lines.
+    - remove=True: drop lines that are entirely whitespace.
+    - compact=N: allow at most N consecutive blank lines (0 means none).
+    If both provided, remove takes precedence.
+    Preserves the trailing newline if the input had one.
+    """
+    had_trailing_newline = text.endswith("\n")
+    lines = text.splitlines()
+
+    out: list[str] = []
+    blank_run = 0
+
+    for line in lines:
+        is_blank = (line.strip() == "")
+        if remove:
+            if is_blank:
+                continue
+            out.append(line)
+            continue
+
+        if compact is not None:
+            if is_blank:
+                if blank_run < max(0, compact):
+                    out.append("")
+                blank_run += 1
+            else:
+                blank_run = 0
+                out.append(line)
+        else:
+            # no changes to blank lines
+            out.append(line)
+
+    result = "\n".join(out)
+    if had_trailing_newline:
+        result += "\n"
+    return result
+
+
 def iter_lean_files(path: Path) -> Iterable[Path]:
     if path.is_file() and path.suffix == ".lean":
         yield path
@@ -121,6 +180,8 @@ def main() -> int:
     ap.add_argument("--inplace", action="store_true", help="Modify files in place")
     ap.add_argument("--outdir", type=Path, default=None, help="Output directory (if not inplace). Mirrors input structure.")
     ap.add_argument("--preserve-lines", action="store_true", help="Preserve newlines (and replace removed chars with spaces)")
+    ap.add_argument("--remove-blank-lines", action="store_true", help="Remove blank (whitespace-only) lines after stripping")
+    ap.add_argument("--compact-blank-lines", type=int, default=None, metavar="N", help="Compact consecutive blank lines to at most N (0 removes them)")
     args = ap.parse_args()
 
     if not args.path.exists():
@@ -135,6 +196,11 @@ def main() -> int:
         try:
             txt = src.read_text(encoding="utf-8", errors="ignore")
             stripped = strip_lean_comments(txt, preserve_lines=args.preserve_lines)
+            # Post-process blank lines if requested
+            if args.remove_blank_lines:
+                stripped = _adjust_blank_lines(stripped, remove=True)
+            elif args.compact_blank_lines is not None:
+                stripped = _adjust_blank_lines(stripped, compact=args.compact_blank_lines)
         except Exception as e:
             print(f"ERROR reading {src}: {e}")
             continue
