@@ -4,6 +4,7 @@ StatementChange/downloads/
 sfs4_new_blocks
 build_check_logs
 LLM_Agent/output/
+LeanJson
 
 # Python
 __pycache__/
