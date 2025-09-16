@@ -3,7 +3,7 @@ StatementChange/uploads/
 StatementChange/downloads/
 sfs4_new_blocks
 build_check_logs
-LLM_Agent/ouput/
+LLM_Agent/output/
 
 # Python
 __pycache__/

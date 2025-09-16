@@ -49,7 +49,7 @@ def prepare_project(project_root: Path):
     except Exception as e:
         log_message(f"Warning: lake build failed: {e}")
 
-def build_lean_file(file_path, output_dir):
+def build_lean_file(file_path, output_dir, log_suffix="build"):
     """
     Build a single Lean file using lake env lean --make
     Returns (block_id, success, stdout, stderr)
@@ -84,8 +84,8 @@ def build_lean_file(file_path, output_dir):
         
         success = result.returncode == 0
         
-        # Save individual logs
-        log_file = output_dir / f"{block_id}_build.log"
+        # Save individual logs (use suffix to distinguish retry)
+        log_file = output_dir / f"{block_id}_{log_suffix}.log"
         with open(log_file, 'w', encoding='utf-8') as f:
             f.write(f"Command: {' '.join(cmd)}\n")
             f.write(f"Return Code: {result.returncode}\n")
@@ -107,7 +107,7 @@ def build_lean_file(file_path, output_dir):
         log_message(f"✗ {block_id} (ERROR: {str(e)})")
         return block_id, False, "", f"Build error: {str(e)}", ""
 
-def run_parallel_build_check(blocks_dir, output_dir, block_range=None, max_workers=4, progress_cb=None):
+def run_parallel_build_check(blocks_dir, output_dir, block_range=None, max_workers=4, progress_cb=None, pattern: str = "*.lean"):
     """
     Run parallel build check on Lean files
     
@@ -123,15 +123,15 @@ def run_parallel_build_check(blocks_dir, output_dir, block_range=None, max_worke
     project_root = find_project_root(blocks_path)
     prepare_project(project_root)
     
-    # Find all Block_*.lean files
-    lean_files = list(blocks_path.glob("Block_*.lean"))
+    # Find Lean files matching pattern
+    lean_files = list(blocks_path.glob(pattern))
     
     # Filter by range if specified
-    if block_range:
+    if block_range and pattern.startswith("Block_"):
         start_num, end_num = block_range
         lean_files = [
             f for f in lean_files 
-            if start_num <= int(f.stem.split('_')[1]) <= end_num
+            if f.stem.count('_') >= 1 and f.stem.split('_')[1].isdigit() and start_num <= int(f.stem.split('_')[1]) <= end_num
         ]
     
     lean_files.sort()
@@ -150,14 +150,18 @@ def run_parallel_build_check(blocks_dir, output_dir, block_range=None, max_worke
     results = []
     successful_builds = []
     failed_builds = []
+
+    # Map block_id -> file path (used for retries)
+    id_to_file = {}
     
     # Run parallel builds
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         # Submit all tasks
-        future_to_file = {
-            executor.submit(build_lean_file, file_path, output_path): file_path
-            for file_path in lean_files
-        }
+        future_to_file = {}
+        for file_path in lean_files:
+            id_to_file[file_path.stem] = file_path
+            future = executor.submit(build_lean_file, file_path, output_path, "build")
+            future_to_file[future] = file_path
         
         # Collect results as they complete
         for future in as_completed(future_to_file):
@@ -167,6 +171,7 @@ def run_parallel_build_check(blocks_dir, output_dir, block_range=None, max_worke
                 "block_id": block_id,
                 "success": success,
                 "log_file": log_file,
+                "attempt": "initial",
                 "has_errors": bool(stderr.strip()),
                 "stdout_lines": len(stdout.splitlines()),
                 "stderr_lines": len(stderr.splitlines())
@@ -188,6 +193,51 @@ def run_parallel_build_check(blocks_dir, output_dir, block_range=None, max_worke
                     })
                 except Exception:
                     pass
+
+    # Retry failed builds once in parallel
+    recovered_blocks = []
+    still_failed_blocks = []
+    if failed_builds:
+        log_message("")
+        log_message("Retrying failed builds once...")
+        retry_files = [id_to_file[b] for b in failed_builds if b in id_to_file]
+        retry_results = {}
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_block = {
+                executor.submit(build_lean_file, f, output_path, "rebuild"): f.stem
+                for f in retry_files
+            }
+            for future in as_completed(future_to_block):
+                block_id = future_to_block[future]
+                try:
+                    bid, success, stdout, stderr, log_file = future.result()
+                except Exception as e:
+                    bid, success, stdout, stderr, log_file = block_id, False, "", str(e), ""
+                retry_results[block_id] = success
+                # record detailed retry result
+                result_entry = {
+                    "block_id": block_id,
+                    "success": success,
+                    "log_file": log_file,
+                    "attempt": "retry",
+                    "has_errors": bool(stderr.strip()),
+                    "stdout_lines": len(stdout.splitlines()),
+                    "stderr_lines": len(stderr.splitlines())
+                }
+                results.append(result_entry)
+
+        # Reconcile final success/failure after retry
+        final_success = set(successful_builds)
+        final_failed = []
+        for b in failed_builds:
+            if retry_results.get(b):
+                recovered_blocks.append(b)
+                final_success.add(b)
+            else:
+                still_failed_blocks.append(b)
+                final_failed.append(b)
+        successful_builds = sorted(final_success)
+        failed_builds = final_failed
     
     # Generate summary report
     summary = {
@@ -198,6 +248,9 @@ def run_parallel_build_check(blocks_dir, output_dir, block_range=None, max_worke
         "success_rate": len(successful_builds) / len(lean_files) * 100 if lean_files else 0,
         "successful_blocks": successful_builds,
         "failed_blocks": failed_builds,
+        "retry_attempted": bool(recovered_blocks or failed_builds),
+        "recovered_blocks": recovered_blocks,
+        "still_failed_blocks": failed_builds,
         "detailed_results": results
     }
     
@@ -217,6 +270,8 @@ def run_parallel_build_check(blocks_dir, output_dir, block_range=None, max_worke
     
     if failed_builds:
         log_message(f"\nFailed blocks: {', '.join(failed_builds)}")
+    if 'recovered_blocks' in summary and summary['recovered_blocks']:
+        log_message(f"Recovered after retry: {', '.join(summary['recovered_blocks'])}")
     
     log_message(f"\nDetailed results saved to: {summary_file}")
     log_message(f"Individual logs saved to: {output_path}")
@@ -241,6 +296,8 @@ def main():
                        help="Block range to check (e.g., '17-100')")
     parser.add_argument("--workers", type=int, default=4, 
                        help="Number of parallel workers")
+    parser.add_argument("--pattern", type=str, default="*.lean",
+                       help="Glob pattern for Lean files (default: '*.lean'). Range filter only applies to 'Block_*'.")
     
     args = parser.parse_args()
     
@@ -260,7 +317,8 @@ def main():
             args.blocks_dir, 
             args.output_dir, 
             block_range, 
-            args.workers
+            args.workers,
+            pattern=args.pattern
         )
         
         # Exit with error code if there were failures

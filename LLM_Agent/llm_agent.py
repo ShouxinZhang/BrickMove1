@@ -24,7 +24,7 @@ Strict rules:
 2. Identify the main mathematical content and restate it as a single primary theorem with a proof placeholder `:= by sorry`. The final statement must be declared with `theorem`, not `lemma`, `corollary`, `def`, etc.
 3. If the original main result is a definition/structure/instance/class or gives a concrete construction, rephrase the main result as an existential/isomorphism-style theorem, e.g., “∃ G, Nonempty (A ≃\* G)” or “∃ K, K.carrier = ...”, whichever matches the mathematical meaning.
 4. Keep names and namespaces consistent with the original file when possible; otherwise use a clear, concise new name.
-5. Keep the rest minimal: remove auxiliary proofs and long constructions that are not the main statement; keep only the single main statement with its header context.
+5. Keep the rest minimal: remove auxiliary lemma that are not the main statement; keep only the single main statement with its header context.
 6. Retain minimal supporting `def`/`instance` declarations that the main theorem’s statement depends on (e.g., a subgroup or structure definition referenced by name in the theorem). Place these immediately before the theorem, preserve original names/signatures, and do not include their proofs/bodies beyond what is strictly necessary for the statement to typecheck. Examples: keep `def G (p) ...` if `theorem order_of_G` quantifies over `G p`; keep an `instance` if it is referenced in the theorem’s types.
 7. Do not include any comments or docstrings in the final output.
 8. Place the single main theorem at the very end of the file, after any minimal supporting declarations, and ensure it is declared with `theorem`.
@@ -225,17 +225,111 @@ class OpenRouterClient:
         raise RuntimeError("Unknown error contacting OpenRouter")
 
 
-def build_messages(system_prompt: str, file_content: str) -> List[Dict[str, str]]:
-    return [
-        {"role": "system", "content": system_prompt},
+FEWSHOT_USER_EXAMPLE = (
+    """
+import Mathlib
+
+/--
+Let $G$ be a group and $H$ a subgroup of $G$.
+If for all $a, b \in G$, the implication $(aH = bH \implies Ha = Hb)$ holds,
+then $H$ is a normal subgroup of $G$.
+The condition $aH = bH \implies Ha = Hb$ is equivalent to $a^{-1}b \in H \implies ab^{-1} \in H$.
+-/
+lemma normal_subgroup_of_coset_implication
+    {G : Type*} [Group G] (H : Subgroup G)
+    -- Precondition: For all $a, b \in G$, if $a^{-1}b \in H$, then $ab^{-1} \in H$.
+    (hyp : ∀ a b : G, (a⁻¹ * b ∈ H) → (a * b⁻¹ ∈ H)) :
+    -- Conclusion: H is a normal subgroup of G
+    H.Normal := by
+  -- Goal: Prove H is normal by proving the `conj_mem` property.
+  -- Use refine' to focus on the core field `conj_mem` of H.Normal.
+  refine' { conj_mem := ?_ }
+  -- Current subgoal: $\forall h \in H, \forall g \in G, g h g^{-1} \in H$.
+  intro h h_in_H g
+  -- Current subgoal: For the given $h \in H$ and $g \in G$, prove $g h g^{-1} \in H$.
+
+  -- Construct elements a and b to apply the hypothesis `hyp`.
+  let a : G := g
+  let h_inv : G := h⁻¹
+  -- Subgoal: Prove $h^{-1} \in H$. Needed for the premise of `hyp`.
+  have h_inv_in_H : h_inv ∈ H := H.inv_mem h_in_H
+  let b : G := g * h_inv
+
+  -- Subgoal: Prove $a^{-1}b \in H$. This is the premise needed to apply `hyp`.
+  -- First establish the equality $a^{-1}b = h^{-1}$.
+  have eq_calc : a⁻¹ * b = h_inv := by
+    calc
+      a⁻¹ * b = g⁻¹ * (g * h_inv) := rfl
+      _ = (g⁻¹ * g) * h_inv := by rw [mul_assoc]
+      _ = 1 * h_inv         := by simp -- simp applies $g^{-1}g = 1$
+      _ = h_inv             := by rw [one_mul]
+  -- Now prove $a^{-1}b \in H$ using the equality and $h^{-1} \in H$.
+  have a_inv_b_in_H : a⁻¹ * b ∈ H := by
+    rw [eq_calc]
+    exact h_inv_in_H
+
+  -- Subgoal: Prove $ab^{-1} \in H$. This follows directly from applying `hyp` to `a_inv_b_in_H`.
+  have a_b_inv_in_H : a * b⁻¹ ∈ H := hyp a b a_inv_b_in_H
+
+  -- Subgoal: Prove $ab^{-1} = g h g^{-1}$. This connects the result from `hyp` to the final goal.
+  have calc_a_b_inv : a * b⁻¹ = g * h * g⁻¹ := by
+    calc
+      a * b⁻¹ = g * (g * h_inv)⁻¹ := rfl
+      _ = g * ( h_inv⁻¹ * g⁻¹ ) := by rw [mul_inv_rev]
+      _ = g * ( h * g⁻¹ ) := by rw [inv_inv h] -- Uses $(h^{-1})^{-1} = n$
+      _ = g * h * g⁻¹ := by rw [mul_assoc]
+
+  -- Conclude the proof using $ab^{-1} = g h g^{-1}$ and $ab^{-1} \in H$.
+  rw [calc_a_b_inv] at a_b_inv_in_H
+  exact a_b_inv_in_H
+
+/--when H is not the subgroup of G then aH=bH, then  follow that Ha≠Hb-/
+theorem contrapositive_of_coset_implication {G : Type*} [Group G] (H : Subgroup G) :
+    (¬ H.Normal) →
+    (∃ a b : G, (a⁻¹ * b ∈ H) ∧ (a * b⁻¹ ∉ H)) := by
+    --contrapositive
+    contrapose!
+    intro hyp_from_contra
+    --recall normal_subgroup_of_coset_implication
+    exact normal_subgroup_of_coset_implication H hyp_from_contra
+"""
+).strip()
+
+FEWSHOT_ASSISTANT_EXAMPLE = (
+    """
+import Mathlib
+
+theorem contrapositive_of_coset_implication {G : Type*} [Group G] (H : Subgroup G) :
+  (¬ H.Normal) →
+  (∃ a b : G, (a⁻¹ * b ∈ H) ∧ (a * b⁻¹ ∉ H)) := by
+  sorry
+"""
+).strip()
+
+
+def build_messages(system_prompt: str, file_content: str, *, include_fewshot: bool = False) -> List[Dict[str, str]]:
+    msgs: List[Dict[str, str]] = [{"role": "system", "content": system_prompt}]
+    if include_fewshot:
+        msgs.append(
+            {
+                "role": "user",
+                "content": (
+                    "Here is a Lean file. Transform it per the rules and return only the final Lean source.\n\n"
+                    + FEWSHOT_USER_EXAMPLE
+                ),
+            }
+        )
+        msgs.append({"role": "assistant", "content": FEWSHOT_ASSISTANT_EXAMPLE})
+    msgs.append(
         {
             "role": "user",
             "content": (
                 "Here is a Lean file. Transform it per the rules and return only the final Lean source.\n\n"
                 + file_content
             ),
-        },
-    ]
+        }
+    )
+    return msgs
 
 
 def process_file(
@@ -248,12 +342,13 @@ def process_file(
     normalize: bool,
     max_tokens: Optional[int],
     retries: int,
+    include_fewshot: bool,
 ) -> Optional[Path]:
     if out_path.exists() and not overwrite:
         return None
 
     src = in_path.read_text(encoding="utf-8", errors="ignore")
-    messages = build_messages(system_prompt, src)
+    messages = build_messages(system_prompt, src, include_fewshot=include_fewshot)
 
     content = ""
     attempt = 0
@@ -304,11 +399,11 @@ def find_lean_files(input_dir: Path, pattern: str) -> List[Path]:
 def parse_args(argv: List[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="LLM agent: transform Lean blocks to main theorem skeletons via OpenRouter")
     p.add_argument("--input-dir", type=Path, default=Path("sfs4_blocks"), help="Directory with source Lean files")
-    # Leave empty to default to LLM_Agent/ouput/MTS<YYYYMMDD_HHMMSS>
-    p.add_argument("--output-dir", type=str, default="", help="Directory to write transformed Lean files (default: LLM_Agent/ouput/MTS<YYYYMMDD_HHMMSS>)")
+    # Leave empty to default to LLM_Agent/output/MTS<YYYYMMDD_HHMMSS>
+    p.add_argument("--output-dir", type=str, default="", help="Directory to write transformed Lean files (default: LLM_Agent/output/MTS<YYYYMMDD_HHMMSS>)")
     p.add_argument("--match", type=str, default="Block_*.lean", help="Glob pattern within input-dir")
     p.add_argument("--model", type=str, default="moonshotai/kimi-k2-0905", help="OpenRouter model id (default: moonshotai/kimi-k2-0905)")
-    p.add_argument("--max-tokens", type=int, default=4096, help="Max tokens for completion")
+    p.add_argument("--max-tokens", type=int, default=0, help="Max tokens for completion (default: unlimited)")
     p.add_argument("--no-max-tokens", action="store_true", help="Omit max_tokens in API payload (no upper cap)")
     p.add_argument("--sleep", type=float, default=0.0, help="Sleep seconds between files (rate limiting)")
     p.add_argument("--overwrite", action="store_true", help="Overwrite existing outputs")
@@ -319,6 +414,7 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     p.add_argument("--continue-on-error", action="store_true", help="Continue processing remaining files when an error occurs")
     p.add_argument("--retries", type=int, default=2, help="Retries per file when the model returns an empty completion")
     p.add_argument("--workers", type=int, default=1000, help="Number of parallel workers")
+    p.add_argument("--fewshot", action="store_true", help="Prepend a priming user/assistant example conversation to guide the model")
     # Leave empty to default to <output-dir>/failed_ids.json and <output-dir>/errors.log
     p.add_argument("--fail-out", type=str, default="", help="Path to write JSON array of failed block ids (default: <output-dir>/failed_ids.json)")
     p.add_argument("--error-log", type=str, default="", help="Path to write detailed error messages (default: <output-dir>/errors.log)")
@@ -355,7 +451,7 @@ def main(argv: List[str]) -> int:
         out_base = Path(args.output_dir)
     else:
         ts = time.strftime("%Y%m%d_%H%M%S")
-        out_base = Path(__file__).parent / "ouput" / f"MTS{ts}"
+        out_base = Path(__file__).parent / "output" / f"MTS{ts}"
 
     # Ensure base output directory exists and resolve log paths
     out_base.mkdir(parents=True, exist_ok=True)
@@ -375,8 +471,11 @@ def main(argv: List[str]) -> int:
     total = 0
     failed = 0
     failed_ids: List[int] = []
-    # Determine effective max_tokens (None when --no-max-tokens is enabled)
-    effective_max_tokens: Optional[int] = None if getattr(args, "no_max_tokens", False) else args.max_tokens
+    # Determine effective max_tokens: None when --no-max-tokens is enabled or when --max-tokens <= 0
+    if getattr(args, "no_max_tokens", False):
+        effective_max_tokens = None
+    else:
+        effective_max_tokens = args.max_tokens if (isinstance(args.max_tokens, int) and args.max_tokens > 0) else None
 
     def worker(path: Path) -> Tuple[Path, bool, Optional[str]]:
         rel = path.relative_to(args.input_dir)
@@ -394,6 +493,7 @@ def main(argv: List[str]) -> int:
                 normalize=args.normalize,
                 max_tokens=effective_max_tokens,
                 retries=args.retries,
+                include_fewshot=args.fewshot,
             )
             if res is not None:
                 return (res, True, None)
@@ -442,6 +542,7 @@ def main(argv: List[str]) -> int:
                         normalize=args.normalize,
                         max_tokens=effective_max_tokens,
                         retries=args.retries,
+                        include_fewshot=args.fewshot,
                     )
                     if res is not None:
                         print(f"Wrote: {res}")
