@@ -258,7 +258,7 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--input-dir", type=Path, default=Path("sfs4_new_blocks"))
     g.add_argument("--match", type=str, default="*.lean")
     g.add_argument("--output-dir", type=Path, default=None)
-    g.add_argument("--model", type=str, default="moonshotai/kimi-k2-0905")
+    g.add_argument("--model", type=str, default="openai/gpt-5")
     g.add_argument("--max-tokens", type=int, default=None)
     g.add_argument("--no-max-tokens", action="store_true")
     g.add_argument("--sleep", type=float, default=0.0)

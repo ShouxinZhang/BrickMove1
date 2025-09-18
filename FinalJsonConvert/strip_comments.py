@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 import argparse
+import json
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Any
 
 
 def strip_lean_comments(text: str, preserve_lines: bool = False) -> str:
@@ -174,20 +175,64 @@ def iter_lean_files(path: Path) -> Iterable[Path]:
                 yield p
 
 
+def _strip_main_statement_in_json(obj: Any, preserve_lines: bool) -> Any:
+    """
+    Recursively traverse JSON-like structures and if an object has a
+    "main theorem statement" string field, strip Lean comments in-place.
+    Returns the modified object.
+    """
+    if isinstance(obj, dict):
+        out = {}
+        for k, v in obj.items():
+            if k == "main theorem statement" and isinstance(v, str):
+                out[k] = strip_lean_comments(v, preserve_lines=preserve_lines)
+            else:
+                out[k] = _strip_main_statement_in_json(v, preserve_lines)
+        return out
+    if isinstance(obj, list):
+        return [_strip_main_statement_in_json(x, preserve_lines) for x in obj]
+    return obj
+
+
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Strip Lean comments from files or folders")
-    ap.add_argument("--path", type=Path, required=True, help="Path to a .lean file or a directory")
-    ap.add_argument("--inplace", action="store_true", help="Modify files in place")
-    ap.add_argument("--outdir", type=Path, default=None, help="Output directory (if not inplace). Mirrors input structure.")
+    ap = argparse.ArgumentParser(description="Strip Lean comments from .lean files OR from JSON 'main theorem statement' fields")
+    ap.add_argument("--path", type=Path, required=True, help="Path to a .lean/.json file or a directory (for .lean)")
+    ap.add_argument("--inplace", action="store_true", help="Modify files in place (lean mode only)")
+    ap.add_argument("--outdir", type=Path, default=None, help="Output directory for lean mode (mirrors structure). For json mode, output is FinalJsonConvert/strip_mainStatement by default, or this path if provided.")
     ap.add_argument("--preserve-lines", action="store_true", help="Preserve newlines (and replace removed chars with spaces)")
-    ap.add_argument("--remove-blank-lines", action="store_true", help="Remove blank (whitespace-only) lines after stripping")
-    ap.add_argument("--compact-blank-lines", type=int, default=None, metavar="N", help="Compact consecutive blank lines to at most N (0 removes them)")
+    ap.add_argument("--remove-blank-lines", action="store_true", help="Remove blank (whitespace-only) lines after stripping (lean mode only)")
+    ap.add_argument("--compact-blank-lines", type=int, default=None, metavar="N", help="Compact consecutive blank lines to at most N (0 removes them) (lean mode only)")
     args = ap.parse_args()
 
     if not args.path.exists():
         print(f"Path not found: {args.path}")
         return 2
 
+    # JSON mode: if input is a JSON file, process only the 'main theorem statement' fields and write output JSON
+    if args.path.is_file() and args.path.suffix.lower() == ".json":
+        try:
+            raw = args.path.read_text(encoding="utf-8")
+            data = json.loads(raw)
+        except Exception as e:
+            print(f"ERROR reading JSON {args.path}: {e}")
+            return 2
+
+        processed = _strip_main_statement_in_json(data, preserve_lines=args.preserve_lines)
+
+        # Determine output path
+        default_outdir = Path("FinalJsonConvert/strip_mainStatement")
+        outdir = args.outdir if args.outdir is not None else default_outdir
+        outdir.mkdir(parents=True, exist_ok=True)
+        out_path = outdir / args.path.name
+        try:
+            out_path.write_text(json.dumps(processed, ensure_ascii=False, indent=2), encoding="utf-8")
+            print(f"Stripped main theorem statements: {args.path} -> {out_path}")
+        except Exception as e:
+            print(f"ERROR writing {out_path}: {e}")
+            return 2
+        return 0
+
+    # Lean mode: .lean file or directory
     if not args.inplace and args.outdir is None and args.path.is_dir():
         print("Provide --inplace or --outdir for directory processing")
         return 2

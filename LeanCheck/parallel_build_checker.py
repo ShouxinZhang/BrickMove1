@@ -124,7 +124,7 @@ def run_parallel_build_check(blocks_dir, output_dir, block_range=None, max_worke
     prepare_project(project_root)
     
     # Find Lean files matching pattern
-    lean_files = list(blocks_path.glob(pattern))
+    lean_files = [p for p in blocks_path.glob(pattern) if ".regen.keep" not in p.name]
     
     # Filter by range if specified
     if block_range and pattern.startswith("Block_"):
