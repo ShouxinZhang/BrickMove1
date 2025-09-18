@@ -5,7 +5,7 @@ import sys
 import time
 import json
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Sequence, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import re
 
@@ -37,9 +37,69 @@ Examples of transformation intent:
 * From long proof scripts → condense into the single main theorem with `:= by sorry`.
 
 Return policy: Output ONLY the final Lean source, nothing else.
+
+关于def或者instance的，可以将其替换为\exists X : xxxtype, X.carrier = xxx, 或者X.toFun = xxx, 或者 X = xxx 
+也可以Nonempty (XXX) 例子有:
+/-- The algebra isomorphism between multivariable polynomials in `Fin (n + 1)` and
+polynomials over multivariable polynomials in `Fin n`.
+-/
+noncomputable def finSuccEquiv (R : Type u) [CommSemiring R] (n : ℕ) :
+  MvPolynomial (Fin (n + 1)) R ≃ₐ[R] Polynomial (MvPolynomial (Fin n) R) :=
+    MvPolynomial.finSuccEquiv R n
+--->
+import Mathlib
+theorem finSuccEquiv1 (R : Type u) [CommSemiring R] (n : ℕ) :
+  Nonempty (MvPolynomial (Fin (n + 1)) R ≃ₐ[R] Polynomial (MvPolynomial (Fin n) R)) := by sorry
+还有
+/-- Prove that `R` is an integral domain. -/
+instance : IsDomain R := Subring.instIsDomainSubtypeMem R
+-- 》
+theorem test : Nonempty (IsDomain R) := by sorry
+还有:
+def initialZ : IsInitial (RingCat.of ℤ) := by
+  -- Use the helper method 'ofUniqueHom' to establish the initial object by providing the unique homomorphism.
+  refine IsInitial.ofUniqueHom ?_ ?_
+  -- For an arbitrary ring R', define the canonical ring homomorphism from ℤ to R'
+  intro R'
+  let tof : ℤ →+* R' := by
+    exact Int.castRingHom R'
+  -- Convert the homomorphism to the form expected by RingCat using 'ofHom'.
+  exact ofHom tof
+  -- To prove uniqueness, assume any homomorphism g and show it equals the canonical one.
+  intro R g
+  apply RingCat.hom_ext
+  ext r
+  simp only [eq_intCast, hom_ofHom]
+
+/--
+-- The terminal object in the category of rings is the zero ring.
+-- We represent the zero ring using `PUnit` (with a shifted universe level) and show that
+-- for any ring R', there is a unique ring homomorphism from R' to the zero ring.
+-/
+def terminalzero : IsTerminal (RingCat.of PUnit.{u + 1}) := by
+  -- Again, use 'ofUniqueHom' to construct the terminal object by providing the unique homomorphism.
+  refine IsTerminal.ofUniqueHom ?_ ?_
+  -- For any ring R', construct the unique homomorphism to the zero ring using 'RingHom.smulOneHom'.
+  intro R'
+  let tof : R' →+* PUnit := by
+    exact RingHom.smulOneHom
+  -- Convert this homomorphism to the appropriate form using 'ofHom'.
+  exact ofHom tof
+  -- To show uniqueness, assume any homomorphism g and prove that it is the same as the canonical one.
+  intro R' g
+  apply RingCat.hom_ext
+  ext r
+-->
+theorem terminalzero : Nonempty (IsTerminal (RingCat.of PUnit.{u + 1})) := by sorry
+还有
+def conj_in_aut {G : Type*} [Group G] (a : G) : G ≃* G := (MulAut.conj a)
+-->
+def conj_in_aut {G : Type*} [Group G] (a : G) : ∃ f : G ≃* G, f.toFun = (MulAut.conj a) := by sorry
 """
 .strip()
 )
+
+VALID_MESSAGE_ROLES = {"system", "user", "assistant"}
 
 def _load_api_key_from_keyfile() -> Optional[str]:
     candidates = [Path.cwd() / ".openrouter_key", Path(__file__).parent / ".openrouter_key"]
@@ -89,6 +149,43 @@ def ensure_top_import_mathlib(text: str) -> str:
     if not seen_import_mathlib:
         cleaned.insert(0, "import Mathlib")
     return "\n".join(cleaned).strip() + "\n"
+
+
+def load_fewshot_messages(path: Optional[Path]) -> List[Dict[str, str]]:
+    if path is None:
+        return []
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"Few-shot JSON not found: {path}") from exc
+    except OSError as exc:
+        raise OSError(f"Unable to read few-shot JSON {path}: {exc}") from exc
+
+    try:
+        data = json.loads(raw) if raw.strip() else []
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON in {path}: {exc}") from exc
+
+    if not isinstance(data, list):
+        raise ValueError(f"Few-shot JSON must contain a list, got {type(data).__name__}")
+
+    normalized: List[Dict[str, str]] = []
+    skipped = 0
+    for idx, entry in enumerate(data):
+        if not isinstance(entry, dict):
+            raise ValueError(f"Entry at index {idx} is not an object: {entry!r}")
+        role = entry.get("role")
+        content = entry.get("content", "")
+        if role not in VALID_MESSAGE_ROLES:
+            skipped += 1
+            continue
+        if not isinstance(content, str):
+            content = "" if content is None else str(content)
+        normalized.append({"role": role, "content": content})
+
+    if skipped:
+        print(f"Warning: skipped {skipped} unsupported message role(s) in {path}", file=sys.stderr)
+    return normalized
 
 
 def build_fallback_skeleton(src: str) -> Optional[str]:
@@ -203,10 +300,34 @@ class OpenRouterClient:
                     raw = resp.read().decode("utf-8", errors="ignore")
                     return json.loads(raw)
             except urlerror.HTTPError as e:
-                # Retry on 5xx; otherwise re-raise
-                if 500 <= e.code < 600:
+                # Retry on 429 (rate limit) and 5xx
+                if e.code == 429 or (500 <= e.code < 600):
                     last_err = e
-                    time.sleep(delay)
+                    retry_after = 0.0
+                    try:
+                        # Honor standard and OpenRouter-specific headers
+                        ra = e.headers.get("Retry-After") if hasattr(e, "headers") else None
+                        if ra:
+                            retry_after = float(ra)
+                        else:
+                            xrr = e.headers.get("X-RateLimit-Reset") if hasattr(e, "headers") else None
+                            if xrr:
+                                # Could be epoch or seconds; best-effort parse
+                                try:
+                                    val = float(xrr)
+                                    # If it's a timestamp in the future, convert to delta
+                                    now = time.time()
+                                    retry_after = max(0.0, val - now) if val > 1e6 else val
+                                except Exception:
+                                    retry_after = 0.0
+                    except Exception:
+                        retry_after = 0.0
+                    sleep_for = max(retry_after, delay)
+                    try:
+                        print(f"WARN: HTTP {e.code} from OpenRouter; retrying in {sleep_for:.1f}s", file=sys.stderr)
+                    except Exception:
+                        pass
+                    time.sleep(sleep_for)
                     delay = min(delay * 2, 20.0)
                     continue
                 # Try to include a short snippet of body for context
@@ -226,7 +347,7 @@ class OpenRouterClient:
 
 
 FEWSHOT_USER_EXAMPLE = (
-    """
+    r"""
 import Mathlib
 
 /--
@@ -296,7 +417,7 @@ theorem contrapositive_of_coset_implication {G : Type*} [Group G] (H : Subgroup 
 ).strip()
 
 FEWSHOT_ASSISTANT_EXAMPLE = (
-    """
+        r"""
 import Mathlib
 
 theorem contrapositive_of_coset_implication {G : Type*} [Group G] (H : Subgroup G) :
@@ -307,8 +428,23 @@ theorem contrapositive_of_coset_implication {G : Type*} [Group G] (H : Subgroup 
 ).strip()
 
 
-def build_messages(system_prompt: str, file_content: str, *, include_fewshot: bool = False) -> List[Dict[str, str]]:
+def build_messages(
+    system_prompt: str,
+    file_content: str,
+    *,
+    include_fewshot: bool = False,
+    extra_turns: Optional[Sequence[Dict[str, str]]] = None,
+) -> List[Dict[str, str]]:
     msgs: List[Dict[str, str]] = [{"role": "system", "content": system_prompt}]
+    if extra_turns:
+        for entry in extra_turns:
+            role = entry.get("role") if isinstance(entry, dict) else None
+            content = entry.get("content") if isinstance(entry, dict) else None
+            if role not in VALID_MESSAGE_ROLES:
+                continue
+            if not isinstance(content, str):
+                content = "" if content is None else str(content)
+            msgs.append({"role": role, "content": content})
     if include_fewshot:
         msgs.append(
             {
@@ -343,17 +479,32 @@ def process_file(
     max_tokens: Optional[int],
     retries: int,
     include_fewshot: bool,
+    fewshot_turns: Optional[Sequence[Dict[str, str]]],
 ) -> Optional[Path]:
     if out_path.exists() and not overwrite:
         return None
 
     src = in_path.read_text(encoding="utf-8", errors="ignore")
-    messages = build_messages(system_prompt, src, include_fewshot=include_fewshot)
+    messages = build_messages(
+        system_prompt,
+        src,
+        include_fewshot=include_fewshot,
+        extra_turns=fewshot_turns,
+    )
 
     content = ""
     attempt = 0
+    last_error: Optional[Exception] = None
     while attempt <= retries:
-        data = client.chat_completion(messages, model=model, max_tokens=max_tokens)
+        try:
+            data = client.chat_completion(messages, model=model, max_tokens=max_tokens)
+        except Exception as exc:
+            last_error = exc
+            attempt += 1
+            if attempt <= retries:
+                time.sleep(min(1.0 * attempt, 2.0))
+                continue
+            break
         choice = (data.get("choices") or [{}])[0]
         content = (
             ((choice.get("message") or {}).get("content") or "").strip()
@@ -364,23 +515,15 @@ def process_file(
         if attempt <= retries:
             time.sleep(min(1.0 * attempt, 2.0))
     if not content:
-        # Fallback: try to synthesize a minimal skeleton from the source
-        fallback = build_fallback_skeleton(src)
-        if fallback:
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-            out_path.write_text(fallback, encoding="utf-8")
-            return out_path
-        # Second-level fallback: produce a minimal compiling skeleton
-        stem = in_path.stem
-        # Prefer a safe simple theorem that always typechecks
-        minimal = (
-            "import Mathlib\n\n" \
-            "/-- Auto-generated minimal skeleton because the LLM returned empty and no signature could be extracted. -/\n" \
-            f"theorem {stem}_main : True := by\n" \
-            "  trivial\n"
-        )
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(minimal, encoding="utf-8")
+        out_path.write_text(src, encoding="utf-8")
+        try:
+            if last_error is not None:
+                print(f"WARN: No completion returned for {in_path}; preserved original file. Last error: {last_error}", file=sys.stderr)
+            else:
+                print(f"WARN: No completion returned for {in_path}; preserved original file.", file=sys.stderr)
+        except Exception:
+            pass
         return out_path
 
     content = strip_code_fences(content)
@@ -401,8 +544,8 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     p.add_argument("--input-dir", type=Path, default=Path("sfs4_blocks"), help="Directory with source Lean files")
     # Leave empty to default to LLM_Agent/output/MTS<YYYYMMDD_HHMMSS>
     p.add_argument("--output-dir", type=str, default="", help="Directory to write transformed Lean files (default: LLM_Agent/output/MTS<YYYYMMDD_HHMMSS>)")
-    p.add_argument("--match", type=str, default="Block_*.lean", help="Glob pattern within input-dir")
-    p.add_argument("--model", type=str, default="moonshotai/kimi-k2-0905", help="OpenRouter model id (default: moonshotai/kimi-k2-0905)")
+    p.add_argument("--match", type=str, default="**/*.lean", help="Glob pattern within input-dir (supports '**' for recursion)")
+    p.add_argument("--model", type=str, default="openai/gpt-5", help="OpenRouter model id (default: openai/gpt-5)")
     p.add_argument("--max-tokens", type=int, default=0, help="Max tokens for completion (default: unlimited)")
     p.add_argument("--no-max-tokens", action="store_true", help="Omit max_tokens in API payload (no upper cap)")
     p.add_argument("--sleep", type=float, default=0.0, help="Sleep seconds between files (rate limiting)")
@@ -415,6 +558,12 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     p.add_argument("--retries", type=int, default=2, help="Retries per file when the model returns an empty completion")
     p.add_argument("--workers", type=int, default=1000, help="Number of parallel workers")
     p.add_argument("--fewshot", action="store_true", help="Prepend a priming user/assistant example conversation to guide the model")
+    p.add_argument(
+        "--fewshot-json",
+        type=Path,
+        default=None,
+        help="Path to JSON file with additional conversation turns to prepend",
+    )
     # Leave empty to default to <output-dir>/failed_ids.json and <output-dir>/errors.log
     p.add_argument("--fail-out", type=str, default="", help="Path to write JSON array of failed block ids (default: <output-dir>/failed_ids.json)")
     p.add_argument("--error-log", type=str, default="", help="Path to write detailed error messages (default: <output-dir>/errors.log)")
@@ -445,6 +594,20 @@ def main(argv: List[str]) -> int:
     system_prompt = DEFAULT_SYSTEM_PROMPT
     if args.append_system:
         system_prompt = f"{system_prompt}\n\nAdditional guidance:\n{args.append_system.strip()}".strip()
+
+    fewshot_turns: List[Dict[str, str]] = []
+    use_builtin_fewshot = bool(args.fewshot)
+    if args.fewshot_json:
+        json_path = args.fewshot_json
+        json_path = json_path.expanduser()
+        if not json_path.is_absolute():
+            json_path = json_path.resolve()
+        try:
+            fewshot_turns = load_fewshot_messages(json_path)
+        except Exception as exc:  # pragma: no cover - CLI safeguard
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
+        use_builtin_fewshot = False
 
     # Resolve output directory
     if args.output_dir:
@@ -493,7 +656,8 @@ def main(argv: List[str]) -> int:
                 normalize=args.normalize,
                 max_tokens=effective_max_tokens,
                 retries=args.retries,
-                include_fewshot=args.fewshot,
+                include_fewshot=use_builtin_fewshot,
+                fewshot_turns=fewshot_turns,
             )
             if res is not None:
                 return (res, True, None)
@@ -542,7 +706,8 @@ def main(argv: List[str]) -> int:
                         normalize=args.normalize,
                         max_tokens=effective_max_tokens,
                         retries=args.retries,
-                        include_fewshot=args.fewshot,
+                        include_fewshot=use_builtin_fewshot,
+                        fewshot_turns=fewshot_turns,
                     )
                     if res is not None:
                         print(f"Wrote: {res}")

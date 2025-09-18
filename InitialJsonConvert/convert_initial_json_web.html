@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>JSON → Lean 批量转换 (InitialJsonConvert)</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Noto Sans", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; margin: 0; background: #0f172a; color: #e2e8f0; }
+    header { padding: 16px 24px; border-bottom: 1px solid #1f2937; }
+    main { padding: 24px; max-width: 920px; margin: 0 auto; }
+    h1 { font-size: 20px; margin: 0; }
+    .dropzone { border: 2px dashed #334155; border-radius: 12px; padding: 32px; text-align: center; background: #0b1220; transition: border-color .2s, background .2s; }
+    .dropzone.drag { border-color: #22d3ee; background: #0a1325; }
+    .actions { margin-top: 16px; display: flex; gap: 12px; align-items: center; }
+    button { background: #2563eb; color: white; border: 0; padding: 10px 16px; border-radius: 8px; cursor: pointer; font-weight: 600; }
+    button:disabled { opacity: .6; cursor: not-allowed; }
+    input[type=file] { display: none; }
+    .hint { color: #94a3b8; font-size: 13px; margin-top: 8px; }
+    .row { margin-top: 20px; }
+    pre { background: #0b1220; border: 1px solid #1f2937; padding: 12px; border-radius: 8px; white-space: pre-wrap; word-break: break-word; }
+    .ok { color: #22c55e; }
+    .err { color: #ef4444; }
+    a { color: #38bdf8; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>JSON → Lean 批量转换</h1>
+  </header>
+  <main>
+    <div class="dropzone" id="dropzone">
+      <p><strong>拖拽</strong> JSON 文件到此处，或点击下方按钮选择文件</p>
+      <p class="hint">要求：顶层必须是数组 (list)。每条记录若含 `formalProof` 字段，将导出为 .lean 文件。</p>
+      <input id="fileInput" type="file" accept="application/json,.json" />
+      <div class="actions">
+        <button id="chooseBtn">选择文件…</button>
+        <button id="startBtn" disabled>开始转换</button>
+        <button id="breakBtn" disabled>Break Convert</button>
+        <label class="hint"><input type="checkbox" id="leanCheckToggle" /> LeanCheck</label>
+        <span id="status" class="hint"></span>
+      </div>
+    </div>
+
+    <div class="row">
+      <div id="result"></div>
+    </div>
+
+    <div class="row">
+      <details>
+        <summary>说明</summary>
+        <ul>
+          <li>转换后会在 <span class="mono">InitialJsonConvert/output/json</span> 下生成美化后的 JSON；</li>
+          <li>Lean 文件输出于形如 <span class="mono">InitialJsonConvert/output/formalProofYYYYMMDD_HHMMSS/</span> 的目录。</li>
+        </ul>
+        <p class="hint">注意：该页面需要配套本地服务启动。请运行：<br/>
+          <span class="mono">python3 InitialJsonConvert/server.py</span>，然后访问 <a href="http://127.0.0.1:8010/" target="_blank">http://127.0.0.1:8010/</a>
+        </p>
+      </details>
+    </div>
+  </main>
+
+  <script>
+    (function(){
+      const dz = document.getElementById('dropzone');
+      const chooseBtn = document.getElementById('chooseBtn');
+      const startBtn = document.getElementById('startBtn');
+      const breakBtn = document.getElementById('breakBtn');
+      const fileInput = document.getElementById('fileInput');
+      const leanCheckToggle = document.getElementById('leanCheckToggle');
+      const statusEl = document.getElementById('status');
+      const resultEl = document.getElementById('result');
+
+      let currentFile = null;
+
+      function setStatus(msg, cls=''){
+        statusEl.textContent = msg || '';
+        statusEl.className = 'hint ' + (cls||'');
+      }
+      function setResult(html){ resultEl.innerHTML = html || ''; }
+
+      function renderLeancheck(info) {
+        if (!info || !info.enabled) {
+          if (info && info.reason) {
+            return `<p class="hint">LeanCheck 未执行：${info.reason}</p>`;
+          }
+          return '';
+        }
+        const total = typeof info.total === 'number' ? info.total : 0;
+        const failed = typeof info.failed === 'number' ? info.failed : 0;
+        const failedRateRaw = typeof info.failed_rate === 'number' ? info.failed_rate : (total ? failed / total * 100 : 0);
+        const failedRate = Number.isFinite(failedRateRaw) ? failedRateRaw : 0;
+        const failedList = (info.failed_ids && info.failed_ids.length)
+          ? info.failed_ids.join(', ')
+          : '无';
+        const leanCheckDir = info.lean_check_dir ? `<p class="hint">LeanCheck 输出目录：<span class="mono">${info.lean_check_dir}</span></p>` : '';
+        const successRoot = info.success_root ? `<p class="hint">成功 Lean 目录：<span class="mono">${info.success_root}</span></p>` : '';
+        const failedRoot = info.failed_root ? `<p class="hint">失败 Lean 目录：<span class="mono">${info.failed_root}</span></p>` : '';
+        const allJson = info.all_json ? `<p class="hint">汇总 JSON：<span class="mono">${info.all_json}</span></p>` : '';
+        const allSuccessJson = info.all_success_json ? `<p class="hint">成功汇总 JSON：<span class="mono">${info.all_success_json}</span></p>` : '';
+        const allFailedJson = info.all_failed_json ? `<p class="hint">失败汇总 JSON：<span class="mono">${info.all_failed_json}</span></p>` : '';
+        const groups = Array.isArray(info.groups) ? info.groups : [];
+        const groupHtml = groups.map(group => {
+          const totalG = typeof group.total === 'number' ? group.total : 0;
+          const failedG = typeof group.failed === 'number' ? group.failed : 0;
+          const failedRateGRaw = typeof group.failed_rate === 'number' ? group.failed_rate : (totalG ? failedG / totalG * 100 : 0);
+          const failedRateG = Number.isFinite(failedRateGRaw) ? failedRateGRaw : 0;
+          const gfails = (group.failed_ids && group.failed_ids.length)
+            ? group.failed_ids.join(', ')
+            : '无';
+          const successDir = group.success_dir ? `<br/>成功目录：<span class="mono">${group.success_dir}</span>` : '';
+          const failedDir = group.failed_dir ? `<br/>失败目录：<span class="mono">${group.failed_dir}</span>` : '';
+          const groupJson = group.group_json ? `<br/>合并 JSON：<span class="mono">${group.group_json}</span>` : '';
+          const successJson = group.success_json ? `<br/>成功 JSON：<span class="mono">${group.success_json}</span>` : '';
+          const failedJson = group.failed_json ? `<br/>失败 JSON：<span class="mono">${group.failed_json}</span>` : '';
+          return `
+            <li>
+              <strong>${group.label}</strong>：共 ${totalG}，失败 ${failedG} (${failedRateG.toFixed(1)}%)<br/>
+              日志目录：<span class="mono">${group.logs_dir}</span>
+              ${successDir}
+              ${failedDir}
+              ${groupJson}
+              ${successJson}
+              ${failedJson}<br/>
+              失败 ID：${gfails}
+            </li>`;
+        }).join('');
+
+        return `
+          <div class="row">
+            <p class="hint">LeanCheck：共 ${total}，失败 ${failed} (${failedRate.toFixed(1)}%)</p>
+            <p class="hint">日志目录：<span class="mono">${info.logs_root}</span></p>
+            <p class="hint">失败 ID：${failedList}</p>
+            ${leanCheckDir}
+            ${successRoot}
+            ${failedRoot}
+            ${allJson}
+            ${allSuccessJson}
+            ${allFailedJson}
+            <ul>${groupHtml}</ul>
+          </div>`;
+      }
+
+      function onFiles(files){
+        const f = files && files[0];
+        if (!f) return;
+        currentFile = f;
+        setStatus('已选择文件：' + f.name);
+        startBtn.disabled = false;
+        breakBtn.disabled = false;
+      }
+
+      // Drag & Drop
+      dz.addEventListener('dragenter', (e) => { e.preventDefault(); dz.classList.add('drag'); });
+      dz.addEventListener('dragover',  (e) => { e.preventDefault(); dz.classList.add('drag'); });
+      dz.addEventListener('dragleave', (e) => { e.preventDefault(); dz.classList.remove('drag'); });
+      dz.addEventListener('drop',      (e) => {
+        e.preventDefault(); dz.classList.remove('drag');
+        onFiles(e.dataTransfer.files);
+      });
+
+      chooseBtn.addEventListener('click', () => fileInput.click());
+      fileInput.addEventListener('change', (e) => onFiles(e.target.files));
+
+      async function runConvert(endpoint, options) {
+        if (!currentFile) return;
+        setStatus(options.startMsg);
+        startBtn.disabled = true;
+        breakBtn.disabled = true;
+        setResult('');
+        try {
+          const fd = new FormData();
+          fd.append('file', currentFile);
+          if (leanCheckToggle.checked) {
+            fd.append('leancheck', '1');
+          }
+          const res = await fetch(endpoint, { method: 'POST', body: fd });
+          const out = await res.json().catch(() => ({}));
+          if (!res.ok || !out || !out.ok) {
+            const err = (out && out.error) ? out.error : ('HTTP ' + res.status);
+            setStatus(options.failMsg + err, 'err');
+            return;
+          }
+          setStatus(options.doneMsg, 'ok');
+          setResult(options.render(out));
+        } catch (e) {
+          setStatus(options.errorMsg + (e && e.message ? e.message : String(e)), 'err');
+        } finally {
+          startBtn.disabled = !currentFile;
+          breakBtn.disabled = !currentFile;
+        }
+      }
+
+      startBtn.addEventListener('click', () => {
+        runConvert('/convert', {
+          startMsg: '上传并转换中…',
+          doneMsg: '转换完成',
+          failMsg: '转换失败：',
+          errorMsg: '转换异常：',
+          render(out) {
+            const leanHtml = renderLeancheck(out.leancheck);
+            return `
+              <p class="ok">转换成功！</p>
+              <ul>
+                <li>美化后的 JSON：<span class="mono">${out.json_output}</span></li>
+                <li>Lean 输出目录：<span class="mono">${out.lean_dir}</span></li>
+              </ul>
+              ${leanHtml}`;
+          },
+        });
+      });
+
+      breakBtn.addEventListener('click', () => {
+        runConvert('/convert-break', {
+          startMsg: '上传并拆分中…',
+          doneMsg: '拆分完成',
+          failMsg: '拆分失败：',
+          errorMsg: '拆分异常：',
+          render(out) {
+            const leanHtml = renderLeancheck(out.leancheck);
+            const items = Array.isArray(out.groups) ? out.groups : [];
+            const list = items.map(group => `
+              <li>
+                <strong>${group.label}</strong>：${group.count} 条<br/>
+                JSON：<span class="mono">${group.json_path}</span><br/>
+                Lean：<span class="mono">${group.lean_dir}</span>
+              </li>`).join('');
+            return `
+              <p class="ok">拆分成功！阈值：${out.threshold} 行</p>
+              <p>输出目录：<span class="mono">${out.base_dir}</span></p>
+              <ul>${list}</ul>
+              ${leanHtml}`;
+          },
+        });
+      });
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Few-shot Conversation Editor</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main>
+    <h1>Few-shot Conversation Editor</h1>
+    <div class="controls">
+      <input id="json-path" type="text" value="history.json" placeholder="history.json" aria-label="JSON 文件路径" />
+      <button id="load">加载</button>
+      <button id="add-system" class="secondary">+ 系统</button>
+      <button id="add-user">+ 用户</button>
+      <button id="add-assistant">+ 助手</button>
+      <button id="random-go" class="secondary">Random Go</button>
+      <button id="save" class="secondary">保存</button>
+    </div>
+    <div id="status" role="status" aria-live="polite"></div>
+    <section id="messages"></section>
+  </main>
+  <script>
+    const DEFAULT_PATH = 'history.json';
+    const messagesContainer = document.getElementById('messages');
+    const pathInput = document.getElementById('json-path');
+    const statusEl = document.getElementById('status');
+    let messages = [];
+
+    function setStatus(message, isError = false) {
+      statusEl.textContent = message;
+      statusEl.style.color = isError ? '#dc2626' : '#047857';
+    }
+
+    function renderMessages() {
+      messagesContainer.innerHTML = '';
+      if (!messages.length) {
+        const empty = document.createElement('p');
+        empty.textContent = '暂无消息。使用上方按钮添加示例对话。';
+        empty.style.color = '#4b5563';
+        messagesContainer.appendChild(empty);
+        return;
+      }
+
+      messages.forEach((msg, index) => {
+        const role = msg.role || 'user';
+        const wrapper = document.createElement('article');
+        wrapper.className = `message ${role}`;
+
+        const header = document.createElement('header');
+
+        const indexLabel = document.createElement('span');
+        indexLabel.textContent = `#${index + 1}`;
+
+        const roleSelect = document.createElement('select');
+        ['system', 'user', 'assistant'].forEach(optionRole => {
+          const option = document.createElement('option');
+          option.value = optionRole;
+          option.textContent = optionRole;
+          if (optionRole === role) {
+            option.selected = true;
+          }
+          roleSelect.appendChild(option);
+        });
+        roleSelect.addEventListener('change', () => {
+          messages[index].role = roleSelect.value;
+          wrapper.className = `message ${roleSelect.value}`;
+        });
+
+        const actions = document.createElement('div');
+        actions.className = 'actions';
+
+        const upBtn = document.createElement('button');
+        upBtn.type = 'button';
+        upBtn.textContent = '上移';
+        upBtn.disabled = index === 0;
+        upBtn.addEventListener('click', () => {
+          if (index === 0) return;
+          const tmp = messages[index - 1];
+          messages[index - 1] = messages[index];
+          messages[index] = tmp;
+          renderMessages();
+        });
+
+        const downBtn = document.createElement('button');
+        downBtn.type = 'button';
+        downBtn.textContent = '下移';
+        downBtn.disabled = index === messages.length - 1;
+        downBtn.addEventListener('click', () => {
+          if (index === messages.length - 1) return;
+          const tmp = messages[index + 1];
+          messages[index + 1] = messages[index];
+          messages[index] = tmp;
+          renderMessages();
+        });
+
+        const deleteBtn = document.createElement('button');
+        deleteBtn.type = 'button';
+        deleteBtn.className = 'danger';
+        deleteBtn.textContent = '删除';
+        deleteBtn.addEventListener('click', () => {
+          messages.splice(index, 1);
+          renderMessages();
+        });
+
+        actions.appendChild(upBtn);
+        actions.appendChild(downBtn);
+        actions.appendChild(deleteBtn);
+
+        header.appendChild(indexLabel);
+        header.appendChild(roleSelect);
+        header.appendChild(actions);
+
+        const textarea = document.createElement('textarea');
+        textarea.value = msg.content || '';
+        textarea.placeholder = '消息内容...';
+        textarea.addEventListener('input', (event) => {
+          messages[index].content = event.target.value;
+        });
+
+        wrapper.appendChild(header);
+        wrapper.appendChild(textarea);
+        messagesContainer.appendChild(wrapper);
+      });
+    }
+
+    async function loadConversation() {
+      const path = pathInput.value.trim() || DEFAULT_PATH;
+      try {
+        const response = await fetch(`/api/conversation?path=${encodeURIComponent(path)}`);
+        if (!response.ok) {
+          throw new Error(`加载失败: ${response.status}`);
+        }
+        const data = await response.json();
+        messages = Array.isArray(data.messages) ? data.messages : [];
+        if (data.path) {
+          pathInput.value = data.path;
+        }
+        setStatus(`已加载 ${path}.`);
+        renderMessages();
+      } catch (error) {
+        messages = [];
+        renderMessages();
+        setStatus(error.message, true);
+      }
+    }
+
+    async function saveConversation() {
+      const path = pathInput.value.trim() || DEFAULT_PATH;
+      if (!messages.length) {
+        setStatus('没有可保存的消息。', true);
+        return;
+      }
+      try {
+        const response = await fetch(`/api/conversation?path=${encodeURIComponent(path)}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ messages })
+        });
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error(text || `保存失败: ${response.status}`);
+        }
+        const result = await response.json();
+        setStatus(`已保存到 ${result.path}.`);
+      } catch (error) {
+        setStatus(error.message, true);
+      }
+    }
+
+    function addMessage(role) {
+      messages.push({ role, content: '' });
+      renderMessages();
+      const last = messagesContainer.querySelector('.message:last-of-type textarea');
+      if (last) {
+        last.focus();
+      }
+    }
+
+    async function randomGo() {
+      try {
+        const response = await fetch('/api/random-example');
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error(text || `随机样本请求失败: ${response.status}`);
+        }
+        const payload = await response.json();
+        const randomMessages = Array.isArray(payload.messages) ? payload.messages : [];
+        if (!randomMessages.length) {
+          setStatus('随机样本为空。', true);
+          return;
+        }
+        messages = messages.concat(randomMessages);
+        renderMessages();
+        const info = payload.source ? `${payload.source}${payload.index !== undefined ? ` #${payload.index}` : ''}` : '随机样本';
+        setStatus(`已追加随机样本：${info}`);
+        const lastTextarea = messagesContainer.querySelector('.message:last-of-type textarea');
+        if (lastTextarea) {
+          lastTextarea.focus();
+        }
+      } catch (error) {
+        setStatus(error.message, true);
+      }
+    }
+
+    document.getElementById('load').addEventListener('click', loadConversation);
+    document.getElementById('save').addEventListener('click', saveConversation);
+    document.getElementById('add-user').addEventListener('click', () => addMessage('user'));
+    document.getElementById('add-assistant').addEventListener('click', () => addMessage('assistant'));
+    document.getElementById('add-system').addEventListener('click', () => addMessage('system'));
+    document.getElementById('random-go').addEventListener('click', randomGo);
+
+    window.addEventListener('DOMContentLoaded', loadConversation);
+  </script>
+</body>
+</html>

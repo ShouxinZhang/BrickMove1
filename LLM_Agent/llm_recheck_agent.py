@@ -44,17 +44,45 @@ Rules:
 )
 
 
-def build_messages(system_prompt: str, file_content: str) -> List[Dict[str, str]]:
-    return [
-        {"role": "system", "content": system_prompt},
+def build_messages(
+    system_prompt: str,
+    file_content: str,
+    *,
+    extra_turns: Optional[List[Dict[str, str]]] = None,
+    include_fewshot: bool = False,
+) -> List[Dict[str, str]]:
+    msgs: List[Dict[str, str]] = [{"role": "system", "content": system_prompt}]
+    if extra_turns:
+        for entry in extra_turns:
+            role = entry.get("role") if isinstance(entry, dict) else None
+            content = entry.get("content") if isinstance(entry, dict) else None
+            if role not in base.VALID_MESSAGE_ROLES:
+                continue
+            if not isinstance(content, str):
+                content = "" if content is None else str(content)
+            msgs.append({"role": role, "content": content})
+    if include_fewshot:
+        # Reuse the same style as llm_agent's FEWSHOT examples to bias towards compiling outputs
+        msgs.append(
+            {
+                "role": "user",
+                "content": (
+                    "This Lean file failed to compile. Return a compiling Lean file.\n\n"
+                    + base.FEWSHOT_USER_EXAMPLE
+                ),
+            }
+        )
+        msgs.append({"role": "assistant", "content": base.FEWSHOT_ASSISTANT_EXAMPLE})
+    msgs.append(
         {
             "role": "user",
             "content": (
                 "This Lean file failed to compile. Please return a compiling Lean file (no fences):\n\n"
                 + file_content
             ),
-        },
-    ]
+        }
+    )
+    return msgs
 
 
 def regenerate_file(
@@ -66,13 +94,15 @@ def regenerate_file(
     normalize: bool = True,
     max_tokens: Optional[int] = None,
     retries: int = 1,
+    extra_turns: Optional[List[Dict[str, str]]] = None,
+    include_fewshot: bool = False,
 ) -> Tuple[Path, bool, Optional[str]]:
     try:
         src = file_path.read_text(encoding="utf-8", errors="ignore")
     except Exception as e:
         return file_path, False, f"read error: {e}"
 
-    messages = build_messages(system_prompt, src)
+    messages = build_messages(system_prompt, src, extra_turns=extra_turns, include_fewshot=include_fewshot)
 
     content = ""
     attempt = 0
@@ -150,6 +180,8 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     p.add_argument("--append-system", type=str, default="", help="Append custom guidance to the system prompt")
     p.add_argument("--api-key", type=str, default="", help="OpenRouter API key; overrides env and .openrouter_key")
     p.add_argument("--second-build-scope", choices=["all", "failed"], default="failed", help="Second build pass scope: rebuild all files or only the previously failed ones (default: failed)")
+    p.add_argument("--fewshot", action="store_true", help="Prepend a priming example conversation to guide regeneration")
+    p.add_argument("--fewshot-json", type=Path, default=None, help="Path to JSON file with additional conversation turns to prepend")
     return p.parse_args(argv)
 
 
@@ -200,6 +232,17 @@ def main(argv: List[str]) -> int:
     print(f"Regenerating {len(to_fix)} failed file(s) with model {args.model} ...")
     effective_max_tokens: Optional[int] = None if args.no_max_tokens or args.max_tokens <= 0 else args.max_tokens
 
+    # Fewshot / extra turns handling
+    extra_turns: List[Dict[str, str]] = []
+    use_builtin_fewshot = bool(args.fewshot)
+    if args.fewshot_json:
+        try:
+            extra_turns = base.load_fewshot_messages(args.fewshot_json)
+            use_builtin_fewshot = False
+        except Exception as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
+
     def worker(p: Path) -> Tuple[Path, bool, Optional[str]]:
         return regenerate_file(
             client,
@@ -209,6 +252,8 @@ def main(argv: List[str]) -> int:
             normalize=args.normalize,
             max_tokens=effective_max_tokens,
             retries=args.retries,
+            extra_turns=extra_turns,
+            include_fewshot=use_builtin_fewshot,
         )
 
     # Backup originals before regeneration for safe rollback
@@ -275,7 +320,6 @@ def main(argv: List[str]) -> int:
         results: List[Dict[str, Any]] = []
         successful: List[str] = []
         failed: List[str] = []
-        from concurrent.futures import ThreadPoolExecutor, as_completed  # local import for clarity
         with ThreadPoolExecutor(max_workers=args.workers) as ex:
             futs = {ex.submit(build_lean_file, p, build_logs_dir, "postregen"): p for p in subset}
             for fut in as_completed(futs):

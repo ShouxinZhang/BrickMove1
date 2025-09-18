@@ -1,0 +1,147 @@
+body {
+  font-family: Arial, sans-serif;
+  background: #f3f4f6;
+  margin: 0;
+  color: #1f2933;
+}
+
+main {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+h1 {
+  font-size: 1.6rem;
+  margin-bottom: 16px;
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.controls input[type="text"] {
+  flex: 1 1 240px;
+  padding: 6px 8px;
+  border: 1px solid #cbd2d9;
+  border-radius: 4px;
+}
+
+.controls button {
+  padding: 8px 12px;
+  border: none;
+  background: #2563eb;
+  color: white;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.controls button.secondary {
+  background: #4b5563;
+}
+
+.controls button.danger {
+  background: #dc2626;
+}
+
+.message header .actions button.danger {
+  background: #dc2626;
+  color: #fff;
+}
+
+#status {
+  min-height: 20px;
+  margin-bottom: 12px;
+  color: #dc2626;
+}
+
+#messages {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.message {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+  border-radius: 12px;
+  background: white;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12);
+}
+
+.message.system {
+  border-left: 6px solid #6366f1;
+}
+
+.message.user {
+  border-left: 6px solid #14b8a6;
+}
+
+.message.assistant {
+  border-left: 6px solid #f59e0b;
+}
+
+.message header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.message header span {
+  font-weight: 600;
+}
+
+.message header select {
+  padding: 4px 6px;
+  border-radius: 4px;
+  border: 1px solid #cbd2d9;
+  background: #eef2f7;
+  font-weight: 600;
+}
+
+.message header .actions {
+  display: flex;
+  gap: 6px;
+}
+
+.message header .actions button {
+  background: #e5e7eb;
+  color: #1f2933;
+  padding: 4px 10px;
+}
+
+.message textarea {
+  min-height: 120px;
+  padding: 10px;
+  border: 1px solid #cbd2d9;
+  border-radius: 8px;
+  resize: vertical;
+  font-size: 0.95rem;
+  line-height: 1.4;
+}
+
+@media (max-width: 640px) {
+  main {
+    padding: 16px;
+  }
+
+  .controls {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .controls input[type="text"] {
+    width: 100%;
+  }
+
+  .controls button {
+    width: 100%;
+  }
+}

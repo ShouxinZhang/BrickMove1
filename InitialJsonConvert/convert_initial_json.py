@@ -5,7 +5,8 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
+from datetime import datetime
 
 
 def load_json(path: Path) -> List[Dict[str, Any]]:
@@ -46,7 +47,9 @@ def make_lean_filename(item: Dict[str, Any], index: int, used: set[str]) -> str:
     return candidate
 
 
-def write_outputs(data: List[Dict[str, Any]], json_output: Path, lean_dir: Path) -> None:
+def write_outputs(
+    data: List[Dict[str, Any]], json_output: Path, lean_dir: Path
+) -> List[Dict[str, Any]]:
     json_output.parent.mkdir(parents=True, exist_ok=True)
     lean_dir.mkdir(parents=True, exist_ok=True)
 
@@ -55,21 +58,43 @@ def write_outputs(data: List[Dict[str, Any]], json_output: Path, lean_dir: Path)
     )
 
     used_names: set[str] = set()
+    mapping: List[Dict[str, Any]] = []
     for index, item in enumerate(data):
         proof = item.get("formalProof")
         if not proof:
             continue
         name = make_lean_filename(item, index, used_names)
-        (lean_dir / name).write_text(ensure_newline(proof), encoding="utf-8")
+        path = lean_dir / name
+        path.write_text(ensure_newline(proof), encoding="utf-8")
+        mapping.append(
+            {
+                "index": index,
+                "filename": name,
+                "stem": Path(name).stem,
+                "path": path,
+                "item": item,
+            }
+        )
+    return mapping
 
 
-def convert(input_path: Path, output_root: Path) -> None:
+def convert(input_path: Path, output_root: Path) -> Dict[str, Any]:
     data = load_json(input_path)
 
+    # Keep pretty JSON under a stable path, but put Lean files
+    # into a timestamped folder: formalProofYYYYMMDD_HHMMSS
     json_output = output_root / "json" / input_path.name
-    lean_dir = output_root / "formalProof"
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    lean_dir = output_root / f"formalProof{ts}"
 
-    write_outputs(data, json_output, lean_dir)
+    mapping = write_outputs(data, json_output, lean_dir)
+    return {
+        "json_output": json_output,
+        "lean_dir": lean_dir,
+        "data": data,
+        "mapping": mapping,
+        "session_name": lean_dir.name,
+    }
 
 
 def main() -> None:
@@ -79,7 +104,10 @@ def main() -> None:
         "--output-root",
         default=Path(__file__).resolve().parent / "output",
         type=Path,
-        help="输出根目录 (默认: InitialJsonConvert/output)",
+        help=(
+            "输出根目录 (默认: InitialJsonConvert/output)。"
+            "Lean 文件将写入形如 formalProofYYYYMMDD_HHMMSS 的时间戳目录下"
+        ),
     )
     args = parser.parse_args()
 
@@ -88,10 +116,10 @@ def main() -> None:
         raise SystemExit(f"找不到输入文件: {input_path}")
 
     output_root = args.output_root
-    convert(input_path, output_root)
+    result = convert(input_path, output_root)
     print(
-        f"已生成可读性更好的 JSON 到 {output_root / 'json' / input_path.name}，"
-        f"并导出 Lean 文件到 {output_root / 'formalProof'}"
+        f"已生成可读性更好的 JSON 到 {result['json_output']}，"
+        f"并导出 Lean 文件到 {result['lean_dir']}"
     )
 
 

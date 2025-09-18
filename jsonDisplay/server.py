@@ -10,7 +10,25 @@ from urllib.parse import urlparse
 
 # ---- Paths ----
 ROOT = Path(__file__).resolve().parent.parent   # Lean project root (JSON & .lean blocks live here)
-JSON_PATH = ROOT / 'sfs4_reshape_with_main.json'
+
+# Prefer LeanJson/… if present; otherwise fall back to project root file.
+def _discover_json_path():
+    candidates = [
+        ROOT / 'LeanJson' / 'sfs4_reshape_with_main.json',
+        ROOT / 'sfs4_reshape_with_main.json',
+    ]
+    for p in candidates:
+        try:
+            if p.exists():
+                return p
+        except Exception:
+            continue
+    # Default to LeanJson path if none exists yet
+    return candidates[0]
+
+JSON_PATH = _discover_json_path()
+ORIGINAL_JSON_PATH = None
+CURRENT_JSON_PATH = JSON_PATH
 BLOCKS_DIR = ROOT / 'sfs4_new_blocks'
 SERVE_DIR = Path(__file__).resolve().parent
 LOCK = threading.Lock()
@@ -117,12 +135,50 @@ def _lsp_initialize():
 
 def _read_json():
     with LOCK:
-        return json.loads(JSON_PATH.read_text(encoding='utf-8'))
+        return json.loads(CURRENT_JSON_PATH.read_text(encoding='utf-8'))
 
 def _write_json(data):
     txt = json.dumps(data, ensure_ascii=False, indent=2)
     with LOCK:
-        JSON_PATH.write_text(txt, encoding='utf-8')
+        try:
+            CURRENT_JSON_PATH.parent.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        CURRENT_JSON_PATH.write_text(txt, encoding='utf-8')
+
+def _sanitize_filename(name: str) -> str:
+    name = name.strip().replace('\x00','')
+    if not name:
+        return 'data.json'
+    # remove path separators
+    name = name.replace('/', '_').replace('\\', '_')
+    # ensure .json suffix
+    if not name.lower().endswith('.json'):
+        name += '.json'
+    return name
+
+def _select_json_targets(name: str, data) -> dict:
+    global ORIGINAL_JSON_PATH, CURRENT_JSON_PATH
+    base_dir = ROOT / 'LeanJson'
+    base_dir.mkdir(parents=True, exist_ok=True)
+    safe_name = _sanitize_filename(name)
+    orig = base_dir / safe_name
+    # write original copy if not present
+    try:
+        if not orig.exists():
+            orig.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+    except Exception:
+        pass
+    # timestamped working file
+    from datetime import datetime
+    ts = datetime.now().strftime('%Y%m%d-%H%M%S')
+    stem = orig.stem
+    ts_name = f"{stem}.{ts}.json"
+    current = orig.parent / ts_name
+    current.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+    ORIGINAL_JSON_PATH = orig
+    CURRENT_JSON_PATH = current
+    return {'original': str(orig), 'current': str(current)}
 
 def _write_block(idx: int, code: str):
     path = BLOCKS_DIR / f'Block_{idx:03d}.lean'
@@ -153,9 +209,33 @@ class Handler(SimpleHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
         if parsed.path == '/data':
-            if not JSON_PATH.exists():
+            if not CURRENT_JSON_PATH.exists():
                 self._set_headers(404); self.wfile.write(b'{"error":"json not found"}'); return
             self._set_headers(200); self.wfile.write(json.dumps(_read_json()).encode('utf-8')); return
+
+        if parsed.path == '/current_json':
+            info = {'current': str(CURRENT_JSON_PATH), 'original': str(ORIGINAL_JSON_PATH) if ORIGINAL_JSON_PATH else None}
+            self._set_headers(200); self.wfile.write(json.dumps({'ok': True, 'info': info}).encode('utf-8')); return
+
+        if parsed.path == '/export_json':
+            if not CURRENT_JSON_PATH.exists():
+                self._set_headers(404); self.wfile.write(b'{"error":"json not found"}'); return
+            from datetime import datetime
+            ts = datetime.now().strftime('%Y%m%d-%H%M%S')
+            stem = CURRENT_JSON_PATH.stem
+            # If stem already has a timestamp, avoid doubling
+            filename = f"{stem}.export.{ts}.json"
+            try:
+                data = CURRENT_JSON_PATH.read_bytes()
+            except Exception as e:
+                self._set_headers(500); self.wfile.write(json.dumps({'error': str(e)}).encode('utf-8')); return
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json; charset=utf-8')
+            self.send_header('Content-Disposition', f'attachment; filename="{filename}"')
+            self.send_header('Cache-Control','no-store, no-cache, must-revalidate, max-age=0')
+            self.end_headers()
+            self.wfile.write(data)
+            return
 
         if parsed.path == '/lean_events':
             # SSE stream for LSP packets
@@ -265,6 +345,18 @@ class Handler(SimpleHTTPRequestHandler):
         try: payload = json.loads(raw.decode('utf-8')) if raw else {}
         except Exception: payload = {}
 
+        if parsed.path == '/import_json':
+            name = (payload.get('name') or '').strip()
+            data = payload.get('data')
+            if not name or not isinstance(data, list):
+                self._set_headers(400); self.wfile.write(b'{"ok":false,"error":"invalid name/data"}'); return
+            try:
+                info = _select_json_targets(name, data)
+                self._set_headers(200); self.wfile.write(json.dumps({'ok': True, 'paths': info}).encode('utf-8'))
+            except Exception as e:
+                self._set_headers(500); self.wfile.write(json.dumps({'ok': False, 'error': str(e)}).encode('utf-8'))
+            return
+
         if parsed.path == '/update':
             idx = int(payload.get('index') or 0); code = payload.get('code') or ''
             if idx <= 0 or code == '':
@@ -333,7 +425,11 @@ def main():
     host, port = '127.0.0.1', 8000
     httpd = ThreadingHTTPServer((host, port), Handler)
     print(f"Serving jsonDisplay on http://{host}:{port}/")
-    print("API: GET /data, POST /update, POST /compile, POST /sync_lean, POST /lean_rpc, POST /read_file")
+    try:
+        print(f"Using JSON file: {CURRENT_JSON_PATH}")
+    except Exception:
+        pass
+    print("API: GET /data, GET /current_json, POST /import_json, POST /update, POST /compile, POST /sync_lean, POST /lean_rpc, POST /read_file")
     httpd.serve_forever()
 
 if __name__ == '__main__':

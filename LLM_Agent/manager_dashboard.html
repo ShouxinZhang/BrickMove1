@@ -1,0 +1,1472 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LLM Agent Manager 可视化控制台</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg-main: #1e1e1e;
+      --bg-panel: #252526ee;
+      --bg-panel-solid: #2d2d30;
+      --accent: #569cd6;
+      --accent-strong: #4fc1ff;
+      --accent-warm: #c586c0;
+      --text-primary: #d4d4d4;
+      --text-secondary: #9cdcfe;
+      --text-muted: #808080;
+      --border: #3c3c3c;
+      --success: #89d185;
+      --card-hover: rgba(86, 156, 214, 0.18);
+      --glow: 0 0 18px rgba(79, 193, 255, 0.55);
+      font-size: 16px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Fira Code", "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+      background: var(--bg-main);
+      color: var(--text-primary);
+      overflow-x: hidden;
+      position: relative;
+    }
+
+    body::before,
+    body::after {
+      content: "";
+      position: fixed;
+      inset: -40vmax;
+      background: radial-gradient(circle at 20% 20%, rgba(79, 193, 255, 0.32), transparent 50%),
+                  radial-gradient(circle at 80% 30%, rgba(197, 134, 192, 0.25), transparent 55%),
+                  radial-gradient(circle at 40% 80%, rgba(255, 204, 128, 0.2), transparent 60%);
+      filter: blur(42px) saturate(120%);
+      animation: swirl 26s ease-in-out infinite;
+      pointer-events: none;
+      z-index: -2;
+    }
+
+    body::after {
+      animation-direction: reverse;
+      animation-duration: 34s;
+      opacity: 0.6;
+    }
+
+    @keyframes swirl {
+      0% { transform: rotate(0deg) scale(1); }
+      50% { transform: rotate(4deg) scale(1.05); }
+      100% { transform: rotate(0deg) scale(1); }
+    }
+
+    .app-shell {
+      position: relative;
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 3.5rem 1.75rem 4rem;
+    }
+
+    header.top-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      background: linear-gradient(120deg, rgba(86, 156, 214, 0.18), rgba(197, 134, 192, 0.18));
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 1.4rem 1.8rem;
+      backdrop-filter: blur(16px);
+      box-shadow: var(--glow);
+    }
+
+    .brand {
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-size: 1.55rem;
+      color: var(--accent-strong);
+    }
+
+    .brand span {
+      color: var(--text-muted);
+      font-size: 0.9rem;
+    }
+
+    .settings-button {
+      border: 1px solid rgba(79, 193, 255, 0.65);
+      border-radius: 999px;
+      background: rgba(45, 45, 48, 0.85);
+      color: var(--text-primary);
+      font-size: 0.95rem;
+      padding: 0.65rem 1.3rem;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      cursor: pointer;
+      transition: background 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .settings-button:hover {
+      background: rgba(45, 45, 48, 0.95);
+      transform: translateY(-1px);
+      box-shadow: var(--glow);
+    }
+
+    .settings-button svg {
+      width: 1.1rem;
+      height: 1.1rem;
+      fill: currentColor;
+    }
+
+    .settings-panel {
+      margin-top: 1.5rem;
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 1.6rem 1.8rem;
+      backdrop-filter: blur(12px);
+      display: none;
+      box-shadow: 0 24px 40px rgba(0, 0, 0, 0.35);
+      position: relative;
+    }
+
+    .settings-panel.active {
+      display: block;
+      animation: fadeIn 0.35s ease;
+    }
+
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+        transform: translateY(-8px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .settings-panel h2 {
+      margin: 0 0 1.2rem;
+      font-size: 1.1rem;
+      color: var(--accent);
+    }
+
+    .settings-grid {
+      display: grid;
+      gap: 1.1rem;
+    }
+
+    .setting-field {
+      display: grid;
+      gap: 0.4rem;
+    }
+
+    .setting-label {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 0.95rem;
+      color: var(--text-secondary);
+    }
+
+    .setting-label span.subtle {
+      color: var(--text-muted);
+      font-size: 0.8rem;
+    }
+
+    .concurrency-control {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .concurrency-control input[type="range"] {
+      flex: 1;
+      accent-color: var(--accent);
+    }
+
+    .concurrency-control input[type="number"] {
+      width: 5.5rem;
+      background: rgba(37, 37, 38, 0.78);
+      color: var(--text-primary);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.45rem 0.6rem;
+      font-family: inherit;
+    }
+
+    .toggle {
+      position: relative;
+      width: 48px;
+      height: 24px;
+    }
+
+    .toggle input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      inset: 0;
+      background: #555;
+      border-radius: 999px;
+      transition: background 0.25s ease;
+    }
+
+    .slider::before {
+      content: "";
+      position: absolute;
+      width: 20px;
+      height: 20px;
+      left: 2px;
+      top: 2px;
+      border-radius: 50%;
+      background: #fff;
+      transition: transform 0.25s ease;
+    }
+
+    .toggle input:checked + .slider {
+      background: linear-gradient(120deg, rgba(79, 193, 255, 0.85), rgba(197, 134, 192, 0.85));
+    }
+
+    .toggle input:checked + .slider::before {
+      transform: translateX(24px);
+    }
+
+    .drop-zone {
+      margin-top: 2rem;
+      border: 1.5px dashed rgba(86, 156, 214, 0.55);
+      border-radius: 16px;
+      padding: 2.5rem 1.5rem;
+      background: rgba(30, 30, 30, 0.75);
+      backdrop-filter: blur(10px);
+      text-align: center;
+      position: relative;
+      transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+      cursor: pointer;
+    }
+
+    .drop-zone:hover {
+      border-color: rgba(79, 193, 255, 0.85);
+      box-shadow: 0 0 28px rgba(79, 193, 255, 0.3);
+      transform: translateY(-2px);
+    }
+
+    .drop-zone.active {
+      border-color: rgba(197, 134, 192, 0.85);
+      box-shadow: 0 0 32px rgba(197, 134, 192, 0.35);
+    }
+
+    .drop-zone svg {
+      width: 48px;
+      height: 48px;
+      fill: var(--accent);
+      opacity: 0.85;
+    }
+
+    .drop-zone h2 {
+      margin: 1rem 0 0.5rem;
+      font-size: 1.15rem;
+      color: var(--accent-strong);
+    }
+
+    .drop-zone p {
+      margin: 0.15rem 0;
+      color: var(--text-muted);
+      font-size: 0.9rem;
+    }
+
+    .drop-zone p strong {
+      color: var(--text-secondary);
+    }
+
+    .selected-folder {
+      margin-top: 1rem;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.55rem;
+      flex-wrap: wrap;
+      background: rgba(86, 156, 214, 0.18);
+      border: 1px solid rgba(86, 156, 214, 0.4);
+      border-radius: 12px;
+      padding: 0.6rem 1rem;
+      font-size: 0.88rem;
+      color: var(--text-secondary);
+    }
+
+    .selected-folder[data-state="pending"] {
+      background: rgba(79, 193, 255, 0.12);
+      border-color: rgba(79, 193, 255, 0.35);
+      color: var(--text-muted);
+    }
+
+    .selected-folder[data-state="error"] {
+      background: rgba(244, 135, 110, 0.12);
+      border-color: rgba(244, 135, 110, 0.4);
+      color: #f48771;
+    }
+
+    .selected-folder .tag {
+      padding: 0.1rem 0.5rem;
+      border-radius: 999px;
+      background: rgba(79, 193, 255, 0.18);
+      border: 1px solid rgba(79, 193, 255, 0.3);
+      font-size: 0.7rem;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+    }
+
+    .selected-folder[data-state="pending"] .tag {
+      background: rgba(255, 255, 255, 0.08);
+      border-color: rgba(255, 255, 255, 0.12);
+      color: inherit;
+    }
+
+    .selected-folder .arrow {
+      opacity: 0.6;
+    }
+
+    .selected-folder code {
+      background: rgba(17, 17, 20, 0.76);
+      border-radius: 8px;
+      padding: 0.25rem 0.6rem;
+      font-size: 0.8rem;
+      color: var(--text-primary);
+    }
+
+    .command-tabs {
+      margin-top: 2.5rem;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 0.85rem;
+    }
+
+    .command-tab {
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 1rem 1.1rem;
+      text-align: left;
+      cursor: pointer;
+      display: grid;
+      gap: 0.4rem;
+      transition: border 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .command-tab.active {
+      border-color: rgba(79, 193, 255, 0.85);
+      box-shadow: var(--glow);
+    }
+
+    .command-tab:hover {
+      transform: translateY(-3px);
+      border-color: rgba(79, 193, 255, 0.65);
+    }
+
+    .command-tab h3 {
+      margin: 0;
+      font-size: 1rem;
+      color: var(--accent);
+    }
+
+    .command-tab span {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+
+    .form-wrapper {
+      margin-top: 1.8rem;
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 1.8rem;
+      backdrop-filter: blur(14px);
+      box-shadow: 0 18px 28px rgba(0, 0, 0, 0.35);
+    }
+
+    .form-wrapper h2 {
+      margin: 0 0 1.4rem;
+      font-size: 1.2rem;
+      color: var(--text-secondary);
+    }
+
+    .form-grid {
+      display: grid;
+      gap: 1.1rem 1.4rem;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    }
+
+    .field {
+      display: grid;
+      gap: 0.45rem;
+      position: relative;
+    }
+
+    .field label {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      letter-spacing: 0.01em;
+    }
+
+    .field input,
+    .field textarea,
+    .field select {
+      background: rgba(37, 37, 38, 0.85);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0.55rem 0.75rem;
+      color: var(--text-primary);
+      font-family: inherit;
+      font-size: 0.95rem;
+      transition: border 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .field input:focus,
+    .field textarea:focus,
+    .field select:focus {
+      outline: none;
+      border-color: rgba(79, 193, 255, 0.8);
+      box-shadow: 0 0 0 3px rgba(79, 193, 255, 0.25);
+    }
+
+    .field textarea {
+      min-height: 110px;
+      resize: vertical;
+    }
+
+    .field.checkbox-field {
+      align-self: end;
+      padding: 0.55rem 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: rgba(37, 37, 38, 0.7);
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+    }
+
+    .field.checkbox-field input {
+      width: 18px;
+      height: 18px;
+      accent-color: var(--accent);
+    }
+
+    .field small {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    .command-preview {
+      margin-top: 1.8rem;
+      display: grid;
+      gap: 0.85rem;
+    }
+
+    .command-preview label {
+      font-size: 0.9rem;
+      color: var(--text-secondary);
+    }
+
+    .command-preview textarea {
+      width: 100%;
+      min-height: 140px;
+      background: #1b1b1f;
+      color: #d7d7d7;
+      border: 1px solid rgba(79, 193, 255, 0.35);
+      border-radius: 12px;
+      padding: 0.85rem 0.95rem;
+      font-family: inherit;
+      font-size: 0.9rem;
+      line-height: 1.55;
+      resize: vertical;
+    }
+
+    .command-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+    }
+
+    .command-actions button {
+      border-radius: 999px;
+      padding: 0.65rem 1.2rem;
+      font-family: inherit;
+      font-size: 0.9rem;
+      border: 1px solid rgba(79, 193, 255, 0.65);
+      background: rgba(30, 30, 30, 0.82);
+      color: var(--text-primary);
+      cursor: pointer;
+      transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+    }
+
+    .command-actions button:hover {
+      transform: translateY(-2px);
+      box-shadow: var(--glow);
+      background: rgba(40, 40, 42, 0.9);
+    }
+
+    .command-actions button.secondary {
+      border-color: rgba(197, 134, 192, 0.6);
+    }
+
+    .command-actions button.primary {
+      border-color: rgba(137, 209, 133, 0.6);
+      background: rgba(45, 80, 45, 0.72);
+    }
+
+    .command-actions button.primary:hover {
+      background: rgba(54, 96, 54, 0.82);
+    }
+
+    .command-actions button[disabled] {
+      opacity: 0.55;
+      cursor: not-allowed;
+      box-shadow: none;
+      transform: none;
+    }
+
+    .command-output {
+      margin-top: 1.2rem;
+      background: rgba(17, 17, 20, 0.85);
+      border: 1px solid rgba(79, 193, 255, 0.3);
+      border-radius: 12px;
+      padding: 1rem 1.2rem;
+      display: grid;
+      gap: 0.7rem;
+    }
+
+    .command-output.running {
+      border-color: rgba(79, 193, 255, 0.55);
+    }
+
+    .command-output.success {
+      border-color: rgba(137, 209, 133, 0.6);
+    }
+
+    .command-output.error {
+      border-color: rgba(244, 135, 110, 0.6);
+    }
+
+    .command-output[hidden] {
+      display: none;
+    }
+
+    .command-output-meta {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+
+    .command-output-meta .status-ok {
+      color: var(--success);
+    }
+
+    .command-output-meta .status-fail {
+      color: #f48771;
+    }
+
+    .command-output-meta code {
+      background: rgba(255, 255, 255, 0.06);
+      padding: 0.2rem 0.45rem;
+      border-radius: 6px;
+      color: var(--text-secondary);
+      font-size: 0.78rem;
+    }
+
+    .command-output pre {
+      margin: 0;
+      font-size: 0.85rem;
+      line-height: 1.5;
+      color: var(--text-primary);
+      background: rgba(0, 0, 0, 0.35);
+      border-radius: 10px;
+      padding: 0.75rem;
+      max-height: 320px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .toast {
+      position: fixed;
+      right: 1.5rem;
+      bottom: 1.5rem;
+      background: rgba(37, 37, 38, 0.95);
+      color: var(--success);
+      border: 1px solid rgba(137, 209, 133, 0.6);
+      padding: 0.85rem 1.2rem;
+      border-radius: 12px;
+      box-shadow: 0 18px 32px rgba(0, 0, 0, 0.35);
+      opacity: 0;
+      transform: translateY(12px);
+      pointer-events: none;
+      transition: opacity 0.25s ease, transform 0.25s ease;
+      z-index: 10;
+    }
+
+    .toast.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .helper-text {
+      margin-top: 1rem;
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+
+    @media (max-width: 720px) {
+      header.top-bar {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+
+      .settings-button {
+        align-self: flex-end;
+      }
+
+      .form-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .command-tabs {
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      }
+
+      .command-actions {
+        flex-direction: column;
+        align-items: stretch;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="top-bar">
+      <div class="brand">
+        <h1>LLM Agent Manager</h1>
+        <span>将 manager.py 的能力以可视化方式调度</span>
+      </div>
+      <button class="settings-button" id="settingsToggle" aria-expanded="false" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Zm9.94 3a1 1 0 0 0-.26-.5l-1.72-1.98a1 1 0 0 0-1.1-.26l-2.17.76a7.34 7.34 0 0 0-1.02-.59l-.33-2.26a1 1 0 0 0-.9-.84h-2.64a1 1 0 0 0-.9.84l-.33 2.26c-.36.15-.7.33-1.02.53l-2.17-.76a1 1 0 0 0-1.1.26l-1.72 1.98a1 1 0 0 0-.26.84l.33 2.26c-.1.2-.2.4-.28.61l-2.17.76a1 1 0 0 0-.62.74l-.48 2.56a1 1 0 0 0 .2.82l1.72 1.98a1 1 0 0 0 1.1.26l2.17-.76c.32.22.66.42 1.02.59l.33 2.26a1 1 0 0 0 .9.84h2.64a1 1 0 0 0 .9-.84l.33-2.26c.36-.15.7-.33 1.02-.53l2.17.76a1 1 0 0 0 1.1-.26l1.72-1.98a1 1 0 0 0 .26-.84l-.33-2.26c.1-.2.2-.4.28-.61l2.17-.76a1 1 0 0 0 .62-.74l.48-2.56a1 1 0 0 0-.2-.82Zm-2.71 3.31-1.9.67a6.18 6.18 0 0 1-.69 1.49l.29 1.97-1.28 1.48-1.89-.67a6.24 6.24 0 0 1-1.64.95l-.29 1.97h-1.92l-.29-1.97a6.18 6.18 0 0 1-1.64-.95l-1.89.67-1.28-1.48.29-1.97a6.18 6.18 0 0 1-.69-1.49l-1.9-.67-.36-1.93 1.28-1.48 1.89.67a6.24 6.24 0 0 1 1.64-.95l.29-1.97h1.92l.29 1.97c.6.23 1.14.56 1.64.95l1.89-.67 1.28 1.48-.29 1.97c.29.48.52.98.69 1.49l1.9.67.36 1.93Z"/></svg>
+        设置
+      </button>
+    </header>
+
+    <section class="settings-panel" id="settingsPanel" aria-hidden="true">
+      <h2>全局设置</h2>
+      <div class="settings-grid">
+        <div class="setting-field">
+          <div class="setting-label">
+            <span>并发数量</span>
+            <span class="subtle">同步更新所有 --workers</span>
+          </div>
+          <div class="concurrency-control">
+            <input type="range" id="concurrencyRange" min="1" max="128" step="1" value="16">
+            <input type="number" id="concurrencyNumber" min="1" max="256" value="16">
+          </div>
+        </div>
+        <div class="setting-field">
+          <div class="setting-label">
+            <span>加载历史对话</span>
+            <span class="subtle">PromptExample/history.json 作为 few-shot</span>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" id="historyToggle" checked>
+            <span class="slider"></span>
+          </label>
+        </div>
+      </div>
+    </section>
+
+    <section class="drop-zone" id="dropZone">
+      <input type="file" id="folderInput" webkitdirectory directory multiple hidden>
+      <svg viewBox="0 0 64 64" aria-hidden="true">
+        <path d="M12 20h16l4 6h20a4 4 0 0 1 4 4v18a4 4 0 0 1-4 4H12a4 4 0 0 1-4-4V24a4 4 0 0 1 4-4Zm42 10H10v18a2 2 0 0 0 2 2h40a2 2 0 0 0 2-2V30Zm-24 6 6 6h-4v8h-4v-8h-4l6-6Z"/>
+      </svg>
+      <h2>拖拽 Lean 项目文件夹到此</h2>
+      <p>也可以点击此处从本地选择 <strong>lean</strong> 工程目录。</p>
+      <p>选择后会自动填充输入 / 目标目录字段。</p>
+      <div class="selected-folder" id="selectedFolder" hidden></div>
+    </section>
+
+    <nav class="command-tabs" id="commandTabs"></nav>
+
+    <section class="form-wrapper" id="formWrapper">
+      <h2 id="formTitle"></h2>
+      <div class="form-grid" id="formGrid"></div>
+      <p class="helper-text" id="commandHint"></p>
+      <div class="command-preview">
+        <label for="commandPreview">生成的命令</label>
+        <textarea id="commandPreview" readonly spellcheck="false"></textarea>
+        <div class="command-actions">
+          <button type="button" class="primary" id="runCommand">执行命令</button>
+          <button type="button" id="copyCommand">复制命令</button>
+          <button type="button" class="secondary" id="resetCommand">恢复默认</button>
+        </div>
+        <div class="command-output" id="commandOutput" hidden>
+          <div class="command-output-meta" id="commandStatus"></div>
+          <pre id="commandOutputText"></pre>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div class="toast" id="toast" role="status">命令已复制到剪贴板</div>
+
+  <script>
+    const historyJsonPath = "LLM_Agent/PromptExample/history.json";
+    const RUN_ENDPOINT = (() => {
+      const fallback = "http://127.0.0.1:8765/run";
+      try {
+        const origin = window.location.origin;
+        if (origin && origin !== "null" && origin.startsWith("http")) {
+          return `${origin.replace(/\/$/, "")}/run`;
+        }
+      } catch (error) {
+        console.warn("无法自动推断运行端点，使用默认值", error);
+      }
+      return fallback;
+    })();
+
+    const API_BASE = (() => {
+      if (RUN_ENDPOINT.endsWith("/run")) {
+        return RUN_ENDPOINT.slice(0, -4);
+      }
+      const idx = RUN_ENDPOINT.lastIndexOf("/");
+      return idx > 0 ? RUN_ENDPOINT.slice(0, idx) : RUN_ENDPOINT;
+    })();
+    const UPLOAD_ENDPOINT = `${API_BASE}/upload`;
+
+    const commandDefinitions = {
+      generate: {
+        title: "generate：批量生成 Lean 代码",
+        hint: "使用 llm_agent.py 对指定输入目录执行批量生成。",
+        baseArgs: ["python3", "-m", "LLM_Agent.manager", "generate"],
+        options: [
+          { id: "inputDir", label: "输入目录 --input-dir", type: "text", placeholder: "sfs4_new_blocks", default: "sfs4_new_blocks", flag: "--input-dir" },
+          { id: "match", label: "匹配模式 --match", type: "text", placeholder: "*.lean", default: "*.lean", flag: "--match" },
+          { id: "outputDir", label: "输出目录 --output-dir", type: "text", placeholder: "(自动生成)", default: "", flag: "--output-dir" },
+          { id: "model", label: "模型 --model", type: "text", default: "moonshotai/kimi-k2-0905", flag: "--model" },
+          { id: "maxTokens", label: "最大 tokens --max-tokens", type: "number", min: 0, placeholder: "(默认由模型决定)", default: "", flag: "--max-tokens" },
+          { id: "noMaxTokens", label: "禁用最大 tokens --no-max-tokens", type: "checkbox", default: false, flag: "--no-max-tokens" },
+          { id: "limit", label: "处理数量上限 --limit", type: "number", min: 0, default: 0, flag: "--limit" },
+          { id: "sleep", label: "请求间隔 --sleep (秒)", type: "number", min: 0, step: "0.1", default: 0, flag: "--sleep" },
+          { id: "workers", label: "并发数 --workers", type: "number", min: 1, default: 16, flag: "--workers", syncWith: "concurrency" },
+          { id: "retries", label: "重试次数 --retries", type: "number", min: 0, default: 2, flag: "--retries" },
+          { id: "overwrite", label: "覆盖已有输出 --overwrite", type: "checkbox", default: true, flag: "--overwrite" },
+          { id: "normalize", label: "落地时规范化 --normalize", type: "checkbox", default: false, flag: "--normalize" },
+          { id: "continueOnError", label: "遇错继续 --continue-on-error", type: "checkbox", default: true, flag: "--continue-on-error" },
+          { id: "appendSystem", label: "附加 system prompt --append-system", type: "textarea", placeholder: "追加的系统提示", default: "", flag: "--append-system" },
+          { id: "apiKey", label: "API Key --api-key", type: "text", placeholder: "可选", default: "", flag: "--api-key" },
+          { id: "fewshot", label: "few-shot 启用 --fewshot", type: "checkbox", default: true, flag: "--fewshot", bindHistory: true },
+          { id: "fewshotJson", label: "few-shot 样例 --fewshot-json", type: "text", placeholder: historyJsonPath, default: historyJsonPath, flag: "--fewshot-json", bindHistory: true }
+        ]
+      },
+      recheck: {
+        title: "recheck：针对失败文件复检回写",
+        hint: "调用 llm_recheck_agent.py 对复检目标目录执行处理。",
+        baseArgs: ["python3", "-m", "LLM_Agent.manager", "recheck"],
+        options: [
+          { id: "targetDir", label: "目标目录 --target-dir", type: "text", placeholder: "输出目录或 MTS 路径", default: "", flag: "--target-dir" },
+          { id: "pattern", label: "文件匹配 --pattern", type: "text", default: "*.lean", flag: "--pattern" },
+          { id: "model", label: "模型 --model", type: "text", default: "openai/gpt-5", flag: "--model" },
+          { id: "maxTokens", label: "最大 tokens --max-tokens", type: "number", min: 0, default: "", flag: "--max-tokens" },
+          { id: "noMaxTokens", label: "禁用最大 tokens --no-max-tokens", type: "checkbox", default: false, flag: "--no-max-tokens" },
+          { id: "workers", label: "并发数 --workers", type: "number", min: 1, default: 50, flag: "--workers", syncWith: "concurrency" },
+          { id: "retries", label: "重试次数 --retries", type: "number", min: 0, default: 1, flag: "--retries" },
+          { id: "normalize", label: "保存时规范化 --normalize", type: "checkbox", default: false, flag: "--normalize" },
+          { id: "appendSystem", label: "附加 system prompt --append-system", type: "textarea", placeholder: "追加的系统提示", default: "", flag: "--append-system" },
+          { id: "apiKey", label: "API Key --api-key", type: "text", placeholder: "可选", default: "", flag: "--api-key" },
+          { id: "secondBuildScope", label: "二次构建范围 --second-build-scope", type: "select", default: "failed", flag: "--second-build-scope", options: [
+            { label: "仅失败文件 (failed)", value: "failed" },
+            { label: "全部文件 (all)", value: "all" }
+          ] },
+          { id: "fewshot", label: "few-shot 启用 --fewshot", type: "checkbox", default: true, flag: "--fewshot", bindHistory: true },
+          { id: "fewshotJson", label: "few-shot 样例 --fewshot-json", type: "text", placeholder: historyJsonPath, default: historyJsonPath, flag: "--fewshot-json", bindHistory: true }
+        ]
+      },
+      pipeline: {
+        title: "pipeline：一键生成 + 复检",
+        hint: "串联 generate 与 recheck，适合全流程跑批。",
+        baseArgs: ["python3", "-m", "LLM_Agent.manager", "pipeline"],
+        options: [
+          { id: "inputDir", label: "输入目录 --input-dir", type: "text", default: "sfs4_new_blocks", flag: "--input-dir" },
+          { id: "match", label: "匹配模式 --match", type: "text", default: "*.lean", flag: "--match" },
+          { id: "outputDir", label: "输出目录 --output-dir", type: "text", default: "", flag: "--output-dir" },
+          { id: "pattern", label: "复检匹配 --pattern", type: "text", default: "*.lean", flag: "--pattern" },
+          { id: "limit", label: "生成数量上限 --limit", type: "number", min: 0, default: 0, flag: "--limit" },
+          { id: "normalize", label: "落地时规范化 --normalize", type: "checkbox", default: false, flag: "--normalize" },
+          { id: "overwrite", label: "允许覆盖 --overwrite", type: "checkbox", default: true, flag: "--overwrite" },
+          { id: "apiKey", label: "API Key --api-key", type: "text", placeholder: "可选", default: "", flag: "--api-key" },
+          { id: "secondBuildScope", label: "复检二次构建范围 --second-build-scope", type: "select", default: "failed", flag: "--second-build-scope", options: [
+            { label: "仅失败文件 (failed)", value: "failed" },
+            { label: "全部文件 (all)", value: "all" }
+          ] },
+          { id: "genModel", label: "生成模型 --gen-model", type: "text", default: "moonshotai/kimi-k2-0905", flag: "--gen-model" },
+          { id: "genMaxTokens", label: "生成最大 tokens --gen-max-tokens", type: "number", min: 0, default: "", flag: "--gen-max-tokens" },
+          { id: "genNoMaxTokens", label: "生成禁用最大 tokens --gen-no-max-tokens", type: "checkbox", default: false, flag: "--gen-no-max-tokens" },
+          { id: "genSleep", label: "生成请求间隔 --gen-sleep", type: "number", min: 0, step: "0.1", default: 0, flag: "--gen-sleep" },
+          { id: "genRetries", label: "生成重试 --gen-retries", type: "number", min: 0, default: 2, flag: "--gen-retries" },
+          { id: "genWorkers", label: "生成并发 --gen-workers", type: "number", min: 1, default: 16, flag: "--gen-workers", syncWith: "concurrency" },
+          { id: "genAppendSystem", label: "生成系统补充 --gen-append-system", type: "textarea", default: "", flag: "--gen-append-system" },
+          { id: "genFewshot", label: "生成 few-shot --gen-fewshot", type: "checkbox", default: true, flag: "--gen-fewshot", bindHistory: true },
+          { id: "genFewshotJson", label: "生成 few-shot 样例 --gen-fewshot-json", type: "text", default: historyJsonPath, flag: "--gen-fewshot-json", bindHistory: true },
+          { id: "recheckModel", label: "复检模型 --recheck-model", type: "text", default: "openai/gpt-5", flag: "--recheck-model" },
+          { id: "recheckMaxTokens", label: "复检最大 tokens --recheck-max-tokens", type: "number", min: 0, default: "", flag: "--recheck-max-tokens" },
+          { id: "recheckNoMaxTokens", label: "复检禁用最大 tokens --recheck-no-max-tokens", type: "checkbox", default: false, flag: "--recheck-no-max-tokens" },
+          { id: "recheckRetries", label: "复检重试 --recheck-retries", type: "number", min: 0, default: 1, flag: "--recheck-retries" },
+          { id: "recheckWorkers", label: "复检并发 --recheck-workers", type: "number", min: 1, default: 50, flag: "--recheck-workers", syncWith: "concurrency" },
+          { id: "recheckAppendSystem", label: "复检系统补充 --recheck-append-system", type: "textarea", default: "", flag: "--recheck-append-system" },
+          { id: "recheckFewshot", label: "复检 few-shot --recheck-fewshot", type: "checkbox", default: true, flag: "--recheck-fewshot", bindHistory: true },
+          { id: "recheckFewshotJson", label: "复检 few-shot 样例 --recheck-fewshot-json", type: "text", default: historyJsonPath, flag: "--recheck-fewshot-json", bindHistory: true }
+        ]
+      },
+      summarize: {
+        title: "summarize-json：统计 success.json",
+        hint: "快速统计 formalProof 字段，生成 CSV 与摘要。",
+        baseArgs: ["python3", "-m", "LLM_Agent.manager", "summarize-json"],
+        options: [
+          { id: "input", label: "输入文件 --input", type: "text", placeholder: "output/MTS_xxx/success.json", default: "", flag: "--input" }
+        ]
+      }
+    };
+
+    const state = {
+      activeCommand: "pipeline",
+      settings: {
+        concurrency: 16,
+        useHistory: true
+      },
+      folderSelection: {
+        displayName: "",
+        workingPath: "",
+        uploading: false
+      },
+      commands: {},
+      lastCommandParts: []
+    };
+
+    Object.keys(commandDefinitions).forEach((key) => {
+      const def = commandDefinitions[key];
+      state.commands[key] = {};
+      def.options.forEach((opt) => {
+        state.commands[key][opt.id] = opt.default;
+      });
+    });
+
+    const commandTabs = document.getElementById("commandTabs");
+    const formGrid = document.getElementById("formGrid");
+    const formWrapper = document.getElementById("formWrapper");
+    const formTitle = document.getElementById("formTitle");
+    const commandHint = document.getElementById("commandHint");
+    const commandPreview = document.getElementById("commandPreview");
+    const copyButton = document.getElementById("copyCommand");
+    const resetButton = document.getElementById("resetCommand");
+    const runButton = document.getElementById("runCommand");
+    const commandOutput = document.getElementById("commandOutput");
+    const commandOutputText = document.getElementById("commandOutputText");
+    const commandStatus = document.getElementById("commandStatus");
+    const toast = document.getElementById("toast");
+    const settingsToggle = document.getElementById("settingsToggle");
+    const settingsPanel = document.getElementById("settingsPanel");
+    const concurrencyRange = document.getElementById("concurrencyRange");
+    const concurrencyNumber = document.getElementById("concurrencyNumber");
+    const historyToggle = document.getElementById("historyToggle");
+    const dropZone = document.getElementById("dropZone");
+    const folderInput = document.getElementById("folderInput");
+    const selectedFolder = document.getElementById("selectedFolder");
+
+    const slugify = (value) => {
+      if (!value) return "";
+      const cleaned = String(value)
+        .trim()
+        .replace(/[^\w.\-]+/g, "-")
+        .replace(/^-+|-+$/g, "");
+      return cleaned || "dataset";
+    };
+
+    const escapeHtml = (value) => String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+
+    const formatValue = (value) => {
+      if (value === null || value === undefined) return "";
+      if (typeof value === "string") {
+        return value.trim();
+      }
+      return value;
+    };
+
+    const buildCommandParts = (commandKey) => {
+      const def = commandDefinitions[commandKey];
+      const values = state.commands[commandKey];
+      const parts = [...def.baseArgs];
+
+      def.options.forEach((opt) => {
+        const raw = values[opt.id];
+        const value = formatValue(raw);
+
+        if (opt.type === "checkbox") {
+          if (value) {
+            parts.push(opt.flag);
+          }
+          return;
+        }
+
+        if (!value && value !== 0) {
+          return;
+        }
+
+        if (opt.flag) {
+          parts.push(opt.flag, String(value));
+        }
+      });
+
+      return parts;
+    };
+
+    const getCommandParts = () => buildCommandParts(state.activeCommand);
+
+    const updateCommandPreview = () => {
+      const parts = getCommandParts();
+      state.lastCommandParts = parts;
+      const commandText = parts
+        .map((token) => {
+          if (/^[\w-.\/]+$/.test(token)) {
+            return token;
+          }
+          return `'${token.replace(/'/g, "'\\''")}'`;
+        })
+        .join(" ");
+      commandPreview.value = commandText;
+    };
+
+    const renderForm = () => {
+      const def = commandDefinitions[state.activeCommand];
+      formTitle.textContent = def.title;
+      commandHint.textContent = def.hint;
+      formGrid.innerHTML = "";
+
+      def.options.forEach((opt) => {
+        const fieldValue = state.commands[state.activeCommand][opt.id];
+        let field;
+        const wrapper = document.createElement("div");
+        wrapper.className = opt.type === "checkbox" ? "field checkbox-field" : "field";
+
+        if (opt.type !== "checkbox") {
+          const label = document.createElement("label");
+          label.setAttribute("for", opt.id);
+          label.textContent = opt.label;
+          wrapper.appendChild(label);
+        }
+
+        switch (opt.type) {
+          case "textarea":
+            field = document.createElement("textarea");
+            field.value = fieldValue || "";
+            if (opt.placeholder) field.placeholder = opt.placeholder;
+            break;
+          case "select":
+            field = document.createElement("select");
+            opt.options.forEach((o) => {
+              const option = document.createElement("option");
+              option.value = o.value;
+              option.textContent = o.label;
+              if (o.value === fieldValue) option.selected = true;
+              field.appendChild(option);
+            });
+            break;
+          case "checkbox":
+            field = document.createElement("input");
+            field.type = "checkbox";
+            field.checked = Boolean(fieldValue);
+            field.id = opt.id;
+            const textSpan = document.createElement("span");
+            textSpan.textContent = opt.label;
+            wrapper.appendChild(field);
+            wrapper.appendChild(textSpan);
+            break;
+          default:
+            field = document.createElement("input");
+            field.type = opt.type || "text";
+            field.value = fieldValue ?? "";
+            if (opt.placeholder) field.placeholder = opt.placeholder;
+            if (opt.min !== undefined) field.min = opt.min;
+            if (opt.max !== undefined) field.max = opt.max;
+            if (opt.step !== undefined) field.step = opt.step;
+            break;
+        }
+
+        if (opt.type !== "checkbox") {
+          field.id = opt.id;
+          wrapper.appendChild(field);
+        }
+
+        formGrid.appendChild(wrapper);
+
+        const updateState = (newValue) => {
+          state.commands[state.activeCommand][opt.id] = newValue;
+          updateCommandPreview();
+        };
+
+        if (opt.type === "checkbox") {
+          field.addEventListener("change", (event) => {
+            updateState(event.target.checked);
+          });
+        } else {
+          field.addEventListener("input", (event) => {
+            const target = event.target;
+            let value = target.value;
+            if (opt.type === "number" && value !== "") {
+              value = Number(value);
+              if (Number.isNaN(value)) {
+                value = "";
+              }
+            }
+            updateState(value);
+          });
+        }
+      });
+
+      updateCommandPreview();
+    };
+
+    const renderTabs = () => {
+      commandTabs.innerHTML = "";
+      Object.entries(commandDefinitions).forEach(([key, def]) => {
+        const tab = document.createElement("div");
+        tab.className = `command-tab${state.activeCommand === key ? " active" : ""}`;
+        tab.dataset.command = key;
+
+        const title = document.createElement("h3");
+        title.textContent = key;
+        const hint = document.createElement("span");
+        hint.textContent = def.hint;
+
+        tab.appendChild(title);
+        tab.appendChild(hint);
+
+        tab.addEventListener("click", () => {
+          state.activeCommand = key;
+          renderTabs();
+          renderForm();
+        });
+
+        commandTabs.appendChild(tab);
+      });
+    };
+
+    const syncConcurrency = (value) => {
+      state.settings.concurrency = value;
+      Object.entries(commandDefinitions).forEach(([key, def]) => {
+        def.options.forEach((opt) => {
+          if (opt.syncWith === "concurrency") {
+            state.commands[key][opt.id] = value;
+          }
+        });
+      });
+      renderForm();
+    };
+
+    const syncHistory = (enabled) => {
+      state.settings.useHistory = enabled;
+      Object.entries(commandDefinitions).forEach(([key, def]) => {
+        def.options.forEach((opt) => {
+          if (opt.bindHistory) {
+            if (opt.type === "checkbox") {
+              state.commands[key][opt.id] = enabled;
+            } else {
+              state.commands[key][opt.id] = enabled ? historyJsonPath : "";
+            }
+          }
+        });
+      });
+      renderForm();
+    };
+
+    const showFolderStatus = (message, stateClass = "") => {
+      if (!message) {
+        selectedFolder.hidden = true;
+        selectedFolder.textContent = "";
+        delete selectedFolder.dataset.state;
+        return;
+      }
+      selectedFolder.hidden = false;
+      selectedFolder.textContent = message;
+      if (stateClass) {
+        selectedFolder.dataset.state = stateClass;
+      } else {
+        delete selectedFolder.dataset.state;
+      }
+    };
+
+    const setUploadInProgress = (active, message = "") => {
+      state.folderSelection.uploading = active;
+      if (active) {
+        showFolderStatus(message || "正在缓存目录…", "pending");
+        runButton.disabled = true;
+        runButton.dataset.uploading = "1";
+      } else {
+        delete runButton.dataset.uploading;
+        if (!runButton.dataset.running) {
+          runButton.disabled = false;
+        }
+      }
+    };
+
+    const applyFolderSelection = ({ displayName, workingPath }) => {
+      state.folderSelection.displayName = displayName || workingPath || "";
+      state.folderSelection.workingPath = workingPath || "";
+      if (!workingPath) {
+        showFolderStatus("", "");
+        return;
+      }
+      const label = displayName || "(未命名)";
+      const working = workingPath;
+      selectedFolder.hidden = false;
+      selectedFolder.dataset.state = "ready";
+      const safeLabel = escapeHtml(label);
+      const safeWorking = escapeHtml(working);
+      selectedFolder.innerHTML = `<span class="tag">来源</span><code>${safeLabel}</code><span class="arrow">→</span><span class="tag">缓存</span><code>${safeWorking}</code>`;
+
+      const outputBase = slugify(displayName || workingPath.split("/").pop() || "dataset");
+      ["generate", "pipeline"].forEach((cmd) => {
+        if (state.commands[cmd] && Object.prototype.hasOwnProperty.call(state.commands[cmd], "inputDir")) {
+          state.commands[cmd].inputDir = workingPath;
+        }
+        if (state.commands[cmd] && Object.prototype.hasOwnProperty.call(state.commands[cmd], "outputDir")) {
+          state.commands[cmd].outputDir = outputBase ? `output/${outputBase}` : "";
+        }
+      });
+      if (state.commands.recheck && Object.prototype.hasOwnProperty.call(state.commands.recheck, "targetDir")) {
+        state.commands.recheck.targetDir = workingPath;
+      }
+      renderForm();
+    };
+
+    const readFileAsBase64 = (file) => new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(reader.error || new Error("读取文件失败"));
+      reader.onload = () => {
+        const result = reader.result;
+        if (typeof result === "string") {
+          const comma = result.indexOf(",");
+          resolve(comma >= 0 ? result.slice(comma + 1) : result);
+        } else {
+          reject(new Error("无法解析文件内容"));
+        }
+      };
+      reader.readAsDataURL(file);
+    });
+
+    const normalizeRelativePath = (rawPath, baseSegment) => {
+      if (!rawPath) return "";
+      const normalized = rawPath.replace(/^\/+/, "").replace(/\\/g, "/");
+      if (baseSegment && normalized.startsWith(`${baseSegment}/`)) {
+        return normalized.slice(baseSegment.length + 1);
+      }
+      return normalized;
+    };
+
+    const cacheFolderFromFiles = async (files, displayName) => {
+      if (!files.length) {
+        throw new Error("没有可缓存的文件");
+      }
+      const first = files[0];
+      const firstPath = first.webkitRelativePath || first.name;
+      const baseSegment = firstPath && firstPath.includes("/") ? firstPath.split("/")[0] : "";
+      const payloadFiles = [];
+      for (const file of files) {
+        const relativePath = normalizeRelativePath(file.webkitRelativePath || file.name, baseSegment);
+        if (!relativePath) {
+          continue;
+        }
+        try {
+          const data = await readFileAsBase64(file);
+          payloadFiles.push({ path: relativePath, data, encoding: "base64" });
+        } catch (error) {
+          console.warn('跳过无法读取的文件', relativePath, error);
+        }
+      }
+      if (!payloadFiles.length) {
+        throw new Error("无法生成有效的文件路径");
+      }
+      const response = await fetch(UPLOAD_ENDPOINT, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          folder: displayName,
+          files: payloadFiles,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(`上传失败: HTTP ${response.status}`);
+      }
+      const data = await response.json();
+      if (data.error) {
+        throw new Error(data.error);
+      }
+      return {
+        displayName: data.display_name || displayName,
+        workingPath: data.cache_dir,
+        fileCount: data.file_count || payloadFiles.length,
+      };
+    };
+
+    const processFileSelection = async (fileList) => {
+      const files = Array.from(fileList || []).filter((file) => file && file.size >= 0);
+      if (!files.length) {
+        applyFolderSelection({ displayName: "", workingPath: "" });
+        return;
+      }
+      const firstRelPath = files[0].webkitRelativePath || "";
+      const displayName = inferFolderFromFiles(fileList) || (firstRelPath.includes("/") ? firstRelPath.split("/")[0] : firstRelPath) || files[0].name || "未命名文件夹";
+      setUploadInProgress(true, `缓存 “${displayName}” 中…`);
+      try {
+        const cached = await cacheFolderFromFiles(files, displayName);
+        applyFolderSelection({
+          displayName: cached.displayName || displayName,
+          workingPath: cached.workingPath,
+        });
+      } catch (error) {
+        console.error("缓存目录失败", error);
+        showFolderStatus(`缓存失败: ${error}`, "error");
+      } finally {
+        setUploadInProgress(false);
+      }
+    };
+
+    const showToast = () => {
+      toast.classList.add("visible");
+      setTimeout(() => toast.classList.remove("visible"), 2100);
+    };
+
+    const resetExecutionPanel = () => {
+      commandOutput.hidden = true;
+      commandOutput.classList.remove("running", "success", "error");
+      commandStatus.replaceChildren();
+      commandOutputText.textContent = "";
+    };
+
+    const combineStdStreams = (stdout, stderr) => {
+      const parts = [];
+      if (stdout) {
+        parts.push(stdout.trimEnd());
+      }
+      if (stderr) {
+        const trimmed = stderr.trimEnd();
+        if (trimmed) {
+          parts.push(`(stderr)\n${trimmed}`);
+        }
+      }
+      return parts.length ? parts.join("\n\n") : "(无输出)";
+    };
+
+    const updateExecutionPanel = ({ tone = "", status = "", body = "", commandText = "" } = {}) => {
+      commandOutput.hidden = false;
+      commandOutput.classList.remove("running", "success", "error");
+      if (tone) {
+        commandOutput.classList.add(tone);
+      }
+      commandStatus.replaceChildren();
+      if (status) {
+        const span = document.createElement("span");
+        if (tone === "success") {
+          span.classList.add("status-ok");
+        } else if (tone === "error") {
+          span.classList.add("status-fail");
+        }
+        span.textContent = status;
+        commandStatus.appendChild(span);
+      }
+      if (commandText) {
+        const code = document.createElement("code");
+        code.textContent = commandText;
+        commandStatus.appendChild(code);
+      }
+      commandOutputText.textContent = body || "";
+    };
+
+    const inferFolderFromFiles = (files) => {
+      if (!files || !files.length) return "";
+      const file = files[0];
+      if (file.webkitRelativePath) {
+        return file.webkitRelativePath.split("/")[0];
+      }
+      const name = file.name || "";
+      const parts = name.split(".");
+      if (parts.length > 1) {
+        parts.pop();
+      }
+      return parts.join(".") || name;
+    };
+
+    commandTabs.addEventListener("keydown", (event) => {
+      if ((event.key === "Enter" || event.key === " ") && event.target.dataset && event.target.dataset.command) {
+        event.preventDefault();
+        const cmd = event.target.dataset.command;
+        state.activeCommand = cmd;
+        renderTabs();
+        renderForm();
+      }
+    });
+
+    settingsToggle.addEventListener("click", () => {
+      const expanded = settingsToggle.getAttribute("aria-expanded") === "true";
+      settingsToggle.setAttribute("aria-expanded", String(!expanded));
+      settingsPanel.classList.toggle("active");
+      settingsPanel.setAttribute("aria-hidden", String(expanded));
+    });
+
+    concurrencyRange.addEventListener("input", (event) => {
+      const value = Number(event.target.value);
+      concurrencyNumber.value = value;
+      syncConcurrency(value);
+    });
+
+    concurrencyNumber.addEventListener("input", (event) => {
+      const raw = Number(event.target.value);
+      if (!Number.isFinite(raw) || raw <= 0) {
+        return;
+      }
+      const value = Math.min(Math.max(1, raw), 256);
+      concurrencyRange.value = value;
+      syncConcurrency(value);
+    });
+
+    historyToggle.addEventListener("change", (event) => {
+      const enabled = event.target.checked;
+      syncHistory(enabled);
+    });
+
+    runButton.addEventListener("click", async () => {
+      const parts = (state.lastCommandParts && state.lastCommandParts.length) ? state.lastCommandParts : getCommandParts();
+      const commandText = commandPreview.value;
+      if (state.folderSelection.uploading) {
+        updateExecutionPanel({ tone: "error", status: "缓存未完成", body: "请等待缓存完成后再执行。", commandText });
+        return;
+      }
+      if (!parts.length) {
+        updateExecutionPanel({ tone: "error", status: "没有可执行的命令", body: "请先配置参数。", commandText });
+        return;
+      }
+      const originalLabel = runButton.textContent;
+      runButton.disabled = true;
+      runButton.dataset.running = "1";
+      runButton.textContent = "执行中...";
+      updateExecutionPanel({ tone: "running", status: "执行中...", body: "命令已提交，请稍候…", commandText });
+      try {
+        const response = await fetch(RUN_ENDPOINT, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ argv: parts, cwd: "." })
+        });
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        const data = await response.json();
+        if (data.error) {
+          throw new Error(data.error);
+        }
+        const body = combineStdStreams(data.stdout || "", data.stderr || "");
+        const exitCode = typeof data.exit_code === "number" ? data.exit_code : NaN;
+        const tone = exitCode === 0 ? "success" : "error";
+        const status = Number.isNaN(exitCode) ? "执行完成" : `${tone === "success" ? "执行成功" : "执行失败"} · 退出码 ${exitCode}`;
+        updateExecutionPanel({ tone, status, body, commandText });
+      } catch (error) {
+        updateExecutionPanel({ tone: "error", status: "执行失败", body: String(error), commandText });
+      } finally {
+        delete runButton.dataset.running;
+        if (runButton.dataset.uploading) {
+          runButton.disabled = true;
+        } else {
+          runButton.disabled = false;
+        }
+        runButton.textContent = originalLabel;
+      }
+    });
+
+    copyButton.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(commandPreview.value);
+        showToast();
+      } catch (error) {
+        console.error("复制失败", error);
+      }
+    });
+
+    resetButton.addEventListener("click", () => {
+      const def = commandDefinitions[state.activeCommand];
+      def.options.forEach((opt) => {
+        let value = opt.default;
+        if (opt.syncWith === "concurrency") {
+          value = state.settings.concurrency;
+        }
+        if (opt.bindHistory) {
+          if (opt.type === "checkbox") {
+            value = state.settings.useHistory;
+          } else {
+            value = state.settings.useHistory ? historyJsonPath : "";
+          }
+        }
+        state.commands[state.activeCommand][opt.id] = value;
+      });
+      renderForm();
+    });
+
+    dropZone.addEventListener("click", () => folderInput.click());
+
+    dropZone.addEventListener("dragover", (event) => {
+      event.preventDefault();
+      dropZone.classList.add("active");
+    });
+
+    dropZone.addEventListener("dragleave", () => {
+      dropZone.classList.remove("active");
+    });
+
+    dropZone.addEventListener("drop", async (event) => {
+      event.preventDefault();
+      dropZone.classList.remove("active");
+      const files = event.dataTransfer?.files;
+      if (files && files.length) {
+        await processFileSelection(files);
+      } else {
+        showFolderStatus("未检测到拖拽文件", "error");
+      }
+    });
+
+    folderInput.addEventListener("change", async (event) => {
+      const { files } = event.target;
+      if (files && files.length) {
+        await processFileSelection(files);
+      }
+      event.target.value = "";
+    });
+
+    resetExecutionPanel();
+    renderTabs();
+    syncConcurrency(state.settings.concurrency);
+    syncHistory(state.settings.useHistory);
+  </script>
+</body>
+</html>

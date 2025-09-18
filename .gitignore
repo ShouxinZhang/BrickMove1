@@ -4,7 +4,13 @@ StatementChange/downloads/
 sfs4_new_blocks
 build_check_logs
 LLM_Agent/output/
+LLM_Agent/testData
 LeanJson
+SimpleTest
+FinalJsonConvert/Lean 
+FinalJsonConvert/mainStatementJson
+FinalJsonConvert/OriginalJson
+InitialJsonConvert/uploads
 
 # Python
 __pycache__/

@@ -24,8 +24,15 @@
     if (await tryPaths(['http://127.0.0.1:8000/data', '/data'])) {
       state.serverMode = true; return;
     }
-    const ok = await tryPaths(['../sfs4_reshape_with_main.json', './sfs4_reshape_with_main.json', '/sfs4_reshape_with_main.json']);
+    const ok = await tryPaths([
+      '../LeanJson/sfs4_reshape_with_main.json',
+      './sfs4_reshape_with_main.json',
+      '../sfs4_reshape_with_main.json',
+      '/sfs4_reshape_with_main.json'
+    ]);
     if (!ok) throw new Error('Failed to fetch JSON');
+    // Even if data was loaded from a static/file path, probe whether local server is available for features.
+    await probeServer();
   }
 
   // -------------------- Utilities --------------------
@@ -36,6 +43,17 @@
     return '';
   }
   function $(id){ return document.getElementById(id); }
+
+  // Probe if local server is reachable (even if JSON was file-loaded)
+  async function probeServer() {
+    try {
+      const res = await fetch('/temp_read', { cache: 'no-store' });
+      if (res.ok) {
+        state.serverMode = true;
+        const statusEl = $('compileStatus'); if (statusEl) statusEl.textContent = 'Server mode';
+      }
+    } catch (_) { /* leave serverMode as-is */ }
+  }
 
   // -------------------- Diagnostics -> Monaco markers + Messages list --------------------
   function diagnosticsToMarkers(diags) {
@@ -215,7 +233,7 @@
   function bind() {
     const nextBtn = $('nextBtn'); const prevBtn = $('prevBtn');
     const nextBtnB = $('nextBtnBottom'); const prevBtnB = $('prevBtnBottom');
-    const loadBtn = $('loadBtn'); const fileInput = $('fileInput');
+  const loadBtn = $('loadBtn'); const fileInput = $('fileInput'); const exportBtn = $('exportBtn');
     const jumpInput = $('jumpInput'); const jumpBtn = $('jumpBtn');
     const jumpInputB = $('jumpInputBottom'); const jumpBtnB = $('jumpBtnBottom');
     const editorHost = $('mainEditor'); const formalHost = $('formalViewer');
@@ -239,9 +257,41 @@
     bindJump(jumpInput, jumpBtn); bindJump(jumpInputB, jumpBtnB);
 
     loadBtn.addEventListener('click', () => fileInput.click());
+    exportBtn?.addEventListener('click', async () => {
+      try {
+        const res = await fetch('/export_json');
+        if (!res.ok) { const t = await res.text(); throw new Error(t || ('HTTP '+res.status)); }
+        const blob = await res.blob();
+        const cd = res.headers.get('Content-Disposition') || '';
+        let fname = 'export.json';
+        const m = /filename="?([^";]+)"?/i.exec(cd); if (m) fname = m[1];
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a'); a.href = url; a.download = fname; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+      } catch (e) { alert('Export failed: '+ (e?.message || e)); }
+    });
     fileInput.addEventListener('change', async (e) => {
       const f = e.target.files && e.target.files[0]; if (!f) return;
-      try { const text = await f.text(); const data = JSON.parse(text); if (!Array.isArray(data)) throw new Error('JSON must be an array'); state.data = data; state.idx = 0; state.serverMode = false; render(); }
+      try {
+        const text = await f.text();
+        const data = JSON.parse(text);
+        if (!Array.isArray(data)) throw new Error('JSON must be an array');
+        state.data = data; state.idx = 0; render();
+        // If server is reachable, announce this import so server can set target files
+        try {
+          const reachable = await fetch('/current_json').then(r => r.ok).catch(() => false);
+          if (reachable) {
+            const name = f.name || 'data.json';
+            const res = await fetch('/import_json', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name, data }) });
+            const out = await res.json().catch(() => ({}));
+            if (res.ok && out && out.ok) {
+              state.serverMode = true;
+            }
+          } else {
+            state.serverMode = false;
+          }
+        } catch (_) { state.serverMode = false; }
+        render();
+      }
       catch (err) { alert('Failed to load selected file: ' + err.message); }
     });
 
@@ -413,11 +463,13 @@
 
           // Connect Lean transport
           try {
-            if (!window.__leanTransportConnected) { LeanClient.connect(); window.__leanTransportConnected = true; const statusEl = $('compileStatus'); if (statusEl) statusEl.textContent = 'Server mode + Lean transport'; }
+            if (!window.__leanTransportConnected) { LeanClient.connect(); window.__leanTransportConnected = true; const statusEl = $('compileStatus'); if (statusEl && state.serverMode) statusEl.textContent = 'Server mode + Lean transport'; }
           } catch(_) {}
         } catch (e) { console.warn('Monaco init failed', e); }
       });
     }
+
+    
 
     async function installTextMateAndTheme(editors) {
       try {
